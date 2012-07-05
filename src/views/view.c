@@ -662,9 +662,9 @@ dt_view_image_expose(
   const dt_image_t *img = dt_image_cache_read_testget(darktable.image_cache, imgid);
   if(selected == 1)
   {
-    outlinecol = 0.4;
     bgcol = 0.6;
     fontcol = 0.5;
+    outlinecol = 0.4;
   }
   if(imgsel == imgid)
   {
@@ -817,6 +817,49 @@ dt_view_image_expose(
     dt_mipmap_cache_read_release(darktable.mipmap_cache, &buf);
 
   const float fscale = fminf(width, height);
+
+  float r1, r2;
+  if(zoom != 1)
+  {
+    r1 = 0.05 * width;
+    r2 = 0.022 * width;
+  }
+  else
+  {
+    r1 = 0.015 * fscale;
+    r2 = 0.007 * fscale;
+  }
+
+  // image altered?
+  if (altered)
+  {
+    // align to right
+    float s = (r1 + r2) * .5;
+    float x = 0, y = 0;
+
+    if (zoom != 1)
+    {
+      x = width * 0.9;
+      y = height * 0.1;
+    }
+    else
+    {
+      x = (.04 + 7 * 0.04) * fscale;
+      y = .12*fscale;
+    }
+
+    cairo_set_line_width(cr, 1.5);
+    cairo_set_source_rgb(cr, outlinecol, outlinecol, outlinecol);
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+
+    dt_view_draw_altered(cr, x, y, s);
+    //g_print("px = %d, x = %.4f, py = %d, y = %.4f\n", px, x, py, y);
+    if (img && abs(px - x) <= 1.2 * s && abs(py - y) <= 1.2 * s) // mouse hovers over the altered-icon -> history tooltip!
+    {
+      darktable.gui->center_tooltip = 1;
+    }
+  }
+  
   if(imgsel == imgid)
   {
     // draw mouseover hover effects, set event hook for mouse button down!
@@ -824,17 +867,6 @@ dt_view_image_expose(
     cairo_set_line_width(cr, 1.5);
     cairo_set_source_rgb(cr, outlinecol, outlinecol, outlinecol);
     cairo_set_line_join (cr, CAIRO_LINE_JOIN_ROUND);
-    float r1, r2;
-    if(zoom != 1)
-    {
-      r1 = 0.05*width;
-      r2 = 0.022*width;
-    }
-    else
-    {
-      r1 = 0.015*fscale;
-      r2 = 0.007*fscale;
-    }
 
     float x, y;
     if(zoom != 1) y = 0.90*height;
@@ -893,25 +925,6 @@ dt_view_image_expose(
     cairo_stroke(cr);
     cairo_set_source_rgb(cr, outlinecol, outlinecol, outlinecol);
     cairo_set_line_width(cr, 1.5);
-
-    // image altered?
-    if(altered)
-    {
-      // align to right
-      float s = (r1+r2)*.5;
-      if(zoom != 1)
-      {
-        x = width*0.9;
-        y = height*0.1;
-      }
-      else x = (.04+7*0.04)*fscale;
-      dt_view_draw_altered(cr, x, y, s);
-      //g_print("px = %d, x = %.4f, py = %d, y = %.4f\n", px, x, py, y);
-      if(img && abs(px-x) <= 1.2*s && abs(py-y) <= 1.2*s) // mouse hovers over the altered-icon -> history tooltip!
-      {
-        darktable.gui->center_tooltip = 1;
-      }
-    }
   }
 
   // kill all paths, in case img was not loaded yet, or is blocked:
