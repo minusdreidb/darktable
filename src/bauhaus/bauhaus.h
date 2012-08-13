@@ -165,6 +165,7 @@ typedef struct dt_bauhaus_t
   float value_font_size;// percent of line height to fill with font for values
   char label_font[256]; // font to draw the label with
   char value_font[256]; // font to draw the value with
+  PangoFontDescription *pango_font_desc; // no need to recreate this for every string we want to print
 
   // colors:
   float bg_normal;      // background without focus
@@ -179,7 +180,7 @@ dt_bauhaus_t;
 static inline int
 dt_bauhaus_get_widget_space()
 {
-  return darktable.bauhaus->scale * darktable.bauhaus->widget_space;
+  return darktable.bauhaus->widget_space;
 }
 #define DT_BAUHAUS_SPACE dt_bauhaus_get_widget_space()
 

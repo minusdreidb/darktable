@@ -125,7 +125,7 @@ RawImage NefDecoder::decodeRawInternal() {
 
     delete metastream;
   } catch (IOException &e) {
-    errors.push_back(_strdup(e.what()));
+    mRaw->setError(e.what());
     // Let's ignore it, it may have delivered somewhat useful data.
   }
 
@@ -212,12 +212,12 @@ void NefDecoder::DecodeUncompressed() {
         readUncompressedRaw(in, size, pos, width*bitPerPixel / 8, bitPerPixel, true);
     } catch (RawDecoderException e) {
       if (i>0)
-        errors.push_back(_strdup(e.what()));
+        mRaw->setError(e.what());
       else
         throw;
     } catch (IOException e) {
       if (i>0)
-        errors.push_back(_strdup(e.what()));
+        mRaw->setError(e.what());
       else
         ThrowRDE("NEF decoder: IO error occurred in first slice, unable to decode more. Error is: %s", e.what());
     }
@@ -329,7 +329,7 @@ void NefDecoder::DecodeD100Uncompressed() {
     }*/
 }
 
-void NefDecoder::checkSupport(CameraMetaData *meta) {
+void NefDecoder::checkSupportInternal(CameraMetaData *meta) {
   vector<TiffIFD*> data = mRootIFD->getIFDsWithTag(MODEL);
   if (data.empty())
     ThrowRDE("NEF Support check: Model name found");
@@ -338,7 +338,7 @@ void NefDecoder::checkSupport(CameraMetaData *meta) {
   this->checkCameraSupported(meta, make, model, "");
 }
 
-void NefDecoder::decodeMetaData(CameraMetaData *meta) {
+void NefDecoder::decodeMetaDataInternal(CameraMetaData *meta) {
   int iso = 0;
   mRaw->cfa.setCFA(CFA_RED, CFA_GREEN, CFA_GREEN2, CFA_BLUE);
 
@@ -346,6 +346,8 @@ void NefDecoder::decodeMetaData(CameraMetaData *meta) {
 
   if (data.empty())
     ThrowRDE("NEF Meta Decoder: Model name found");
+  if (!data[0]->hasEntry(MAKE))
+    ThrowRDE("NEF Support: Make name not found");
 
   int white = mRaw->whitePoint;
   int black = mRaw->blackLevel;

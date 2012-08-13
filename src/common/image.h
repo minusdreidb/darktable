@@ -92,9 +92,6 @@ typedef struct dt_image_t
   // used by library
   int32_t num, flags, film_id, id;
 
-  // FIXME: find out what this should do, and how
-  int32_t dirty;
-
   uint32_t filters;  // demosaic pattern
   int32_t bpp;       // bytes per pixel
  
@@ -296,6 +293,12 @@ dt_image_orientation_to_flip_bits(const int orient)
   }
 }
 
+/** physically move image with imgid and its duplicates to the film roll
+ *  given by filmid. returns -1 on error, 0 on success. */
+int32_t dt_image_move(const int32_t imgid, const int32_t filmid);
+/** physically cope image to the folder of the film roll with filmid and
+ *  duplicate update database entries. */
+int32_t dt_image_copy(const int32_t imgid, const int32_t filmid);
 // xmp functions:
 void dt_image_write_sidecar_file(int imgid);
 void dt_image_synch_xmp(const int selected);
