@@ -65,6 +65,8 @@ int dt_film_new(dt_film_t *film,const char *directory);
 void dt_film_image_import(dt_film_t *film,const char *filename, gboolean override_ignore_jpegs);
 /** removes all empty film rolls. */
 void dt_film_remove_empty();
+/** move film roll with id to new folder */
+int32_t dt_film_move(const int32_t id, const gchar *new_dir);
 
 #endif
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh

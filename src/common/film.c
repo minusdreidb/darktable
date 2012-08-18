@@ -511,6 +511,52 @@ void dt_film_remove(const int id)
   // dt_control_update_recent_films();
 }
 
+int32_t dt_film_move(const int32_t id, const gchar *new_dir)
+{
+  int32_t result = -1;
+  sqlite3_stmt *stmt;
+  gchar *old_dir = NULL;
+  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
+      "select folder from film_rolls where id = ?1", -1, &stmt, NULL);
+  DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, id);
+  if(sqlite3_step(stmt) == SQLITE_ROW)
+    old_dir = g_strdup((gchar *) sqlite3_column_text(stmt, 0));
+  sqlite3_finalize(stmt);
+
+  GFile *old_gfile = g_file_new_for_path(old_dir);
+  GFile *new_gfile = g_file_new_for_path(new_dir);
+
+  // move film roll
+  GError *gerror = NULL;
+  g_file_move(old_gfile, new_gfile, G_FILE_COPY_NONE, NULL, NULL, NULL, &gerror);
+
+  if(gerror == NULL)
+  {
+    // update film rolls's folder to new directory
+    DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
+          "update film_rolls set folder = ?1 where id = ?2", -1, &stmt, NULL);
+    DT_DEBUG_SQLITE3_BIND_TEXT(stmt, 1, new_dir, -1, SQLITE_STATIC);
+    DT_DEBUG_SQLITE3_BIND_INT(stmt, 2, id);
+
+    if (sqlite3_step(stmt) == SQLITE_DONE)
+      result = 0;
+    else
+      fprintf(stderr, "Failed to update folder of moved film roll from %s to %s\n",
+          old_dir, new_dir);
+
+    sqlite3_finalize(stmt);
+  }
+  else
+    fprintf(stderr, "Failed to move film roll from %s to %s: %s\n",
+        old_dir, new_dir, gerror->message);
+
+  g_free(old_dir);
+  g_object_unref(old_gfile);
+  g_object_unref(new_gfile);
+  g_clear_error(&gerror);
+  return result;
+}
+
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-space on;
