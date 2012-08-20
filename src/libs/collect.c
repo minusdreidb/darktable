@@ -274,7 +274,7 @@ void view_popup_menu_onSync (GtkWidget *menuitem, gpointer userdata)
                                           GTK_DIALOG_DESTROY_WITH_PARENT,
                                           GTK_MESSAGE_QUESTION,
                                           GTK_BUTTONS_YES_NO,
-                                          "_(There are %d new images and %d deleted images. Do you want to sync this folder?)", count_new, 
+                                          _("There are %d new images and %d deleted images. Do you want to sync this folder?"), count_new,
                                           count_missing);
 
   if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT)
