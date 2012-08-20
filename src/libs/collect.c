@@ -442,6 +442,76 @@ void view_popup_menu_onRemove (GtkWidget *menuitem, gpointer userdata)
 }
 
 void
+view_popup_menu_onMove(GtkWidget *menuitem, gpointer userdata)
+{
+  GtkTreeView *treeview = GTK_TREE_VIEW(userdata);
+
+  GtkTreeSelection *selection = NULL;
+  GtkTreeIter iter;
+  GtkTreeModel *model = NULL;
+  gchar *filmroll_path = NULL;
+  gchar *query = NULL;
+  sqlite3_stmt *stmt = NULL;
+
+  /* Get info about the filmroll (or parent) selected */
+  model = gtk_tree_view_get_model(treeview);
+  selection = gtk_tree_view_get_selection(GTK_TREE_VIEW(treeview));
+  gtk_tree_selection_get_selected(selection, &model, &iter);
+  gtk_tree_model_get(model, &iter, 1, &filmroll_path, -1);
+  gtk_tree_model_get(model, &iter, DT_LIB_COLLECT_COL_PATH, &filmroll_path, -1);
+
+  query = dt_util_dstrcat(query, "select id from film_rolls where folder like '%s%%'", filmroll_path);
+  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), query, -1, &stmt, NULL);
+  g_free(query);
+  query = NULL;
+
+  if(sqlite3_step(stmt) == SQLITE_ROW)
+  {
+    int film_id = sqlite3_column_int(stmt, 0);
+    gchar *dir = NULL;
+    GtkWidget *win = dt_ui_main_window(darktable.gui->ui);
+
+    GtkWidget *filechooser = gtk_file_chooser_dialog_new (_("select directory"),
+        GTK_WINDOW (win),
+        GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER,
+        GTK_STOCK_CANCEL, GTK_RESPONSE_CANCEL,
+        GTK_STOCK_OPEN, GTK_RESPONSE_ACCEPT,
+        (char *)NULL);
+    gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(filechooser), FALSE);
+
+    if(gtk_dialog_run (GTK_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
+    {
+      dir = gtk_file_chooser_get_filename (GTK_FILE_CHOOSER(filechooser));
+    }
+    gtk_widget_destroy(filechooser);
+
+    //TODO: check if there are film-rolls in subdirectories and show appropriate message in dialog (ngettext).
+    if(dir && g_file_test(dir, G_FILE_TEST_IS_DIR))
+    {
+      GtkWidget *dialog = gtk_message_dialog_new(GTK_WINDOW(win),
+          GTK_DIALOG_DESTROY_WITH_PARENT,
+          GTK_MESSAGE_QUESTION,
+          GTK_BUTTONS_YES_NO,
+          _("do you really want to physically move the selected film_roll to %s?"), dir);
+
+      if( gtk_dialog_run(GTK_DIALOG(dialog))== GTK_RESPONSE_ACCEPT)
+      {
+       //TODO: Do it!
+
+        (void)film_id; // silence gcc about unused variable, for now ;)
+      }
+
+      gtk_widget_destroy(dialog);
+    }
+
+    g_free(dir);
+
+  }
+  sqlite3_finalize(stmt);
+  g_free(filmroll_path);
+}
+
+void
 view_popup_menu (GtkWidget *treeview, GdkEventButton *event, gpointer userdata)
 {
   GtkWidget *menu, *menuitem;
@@ -463,6 +533,11 @@ view_popup_menu (GtkWidget *treeview, GdkEventButton *event, gpointer userdata)
   gtk_menu_shell_append(GTK_MENU_SHELL(menu), menuitem);
   g_signal_connect(menuitem, "activate",
                    (GCallback) view_popup_menu_onRemove, treeview);
+
+  menuitem = gtk_menu_item_new_with_label(_("move..."));
+  gtk_menu_shell_append(GTK_MENU_SHELL(menu), menuitem);
+  g_signal_connect(menuitem, "activate",
+                   (GCallback) view_popup_menu_onMove, treeview);
 
   gtk_widget_show_all(menu);
 
