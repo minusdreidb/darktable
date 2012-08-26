@@ -597,7 +597,7 @@ int32_t dt_film_move(const int32_t id, const gchar *new_dir)
     // update film rolls's folder to new directory
     // TODO: handle last / in path correctly for replace if ?1 and ?2 are not terminated equally!
     DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
-          "update film_rolls set folder = replace(folder, ?1, ?2) where folder like = ?1", -1, &stmt, NULL);
+          "update film_rolls set folder = replace(folder,?1,?2) where folder like ?1", -1, &stmt, NULL);
     DT_DEBUG_SQLITE3_BIND_TEXT(stmt, 1, old_dir, -1, SQLITE_STATIC);
     DT_DEBUG_SQLITE3_BIND_TEXT(stmt, 2, new_dir, -1, SQLITE_STATIC);
 

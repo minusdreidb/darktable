@@ -541,14 +541,16 @@ view_popup_menu_onMove(GtkWidget *menuitem, gpointer userdata)
   gtk_tree_model_get(model, &iter, 1, &filmroll_path, -1);
   gtk_tree_model_get(model, &iter, DT_LIB_COLLECT_COL_PATH, &filmroll_path, -1);
 
-  query = dt_util_dstrcat(query, "select id from film_rolls where folder like '%s%%'", filmroll_path);
+  query = dt_util_dstrcat(query, "select id, folder from film_rolls where folder like '%s%%'", filmroll_path);
   DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), query, -1, &stmt, NULL);
   g_free(query);
   query = NULL;
 
+  //TODO: Erlauben Verzeichnisse zu verschieben, die selbst keine Filmrolle sind, aber Filmrollen als Unterverzeichnisse enthalten.
   if(sqlite3_step(stmt) == SQLITE_ROW)
   {
     int film_id = sqlite3_column_int(stmt, 0);
+    gchar *folder = (gchar *) sqlite3_column_text(stmt, 1);
     gchar *dir = NULL;
     GtkWidget *win = dt_ui_main_window(darktable.gui->ui);
 
@@ -569,24 +571,28 @@ view_popup_menu_onMove(GtkWidget *menuitem, gpointer userdata)
     //TODO: check if there are film-rolls in subdirectories and show appropriate message in dialog (ngettext).
     if(dir && g_file_test(dir, G_FILE_TEST_IS_DIR))
     {
+      gchar *folder_basename = g_path_get_basename(folder);
+      gchar *new_folder = g_build_filename(dir, folder_basename, NULL);
+
       GtkWidget *dialog = gtk_message_dialog_new(GTK_WINDOW(win),
           GTK_DIALOG_DESTROY_WITH_PARENT,
           GTK_MESSAGE_QUESTION,
           GTK_BUTTONS_YES_NO,
-          _("do you really want to physically move the selected film_roll to %s?"), dir);
+          _("Do you really want to physically move the selected film roll %s to %s?"),
+          folder_basename, new_folder);
 
-      if( gtk_dialog_run(GTK_DIALOG(dialog))== GTK_RESPONSE_ACCEPT)
+      if(gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_YES)
       {
-       //TODO: Do it!
-
-        (void)film_id; // silence gcc about unused variable, for now ;)
+       //TODO: Do it in background job.
+        dt_film_move(film_id, new_folder);
+        dt_control_signal_raise(darktable.signals , DT_SIGNAL_FILMROLLS_CHANGED);
+        dt_collection_update_query(darktable.collection);
       }
-
       gtk_widget_destroy(dialog);
+      g_free(folder_basename);
+      g_free(new_folder);
     }
-
     g_free(dir);
-
   }
   sqlite3_finalize(stmt);
   g_free(filmroll_path);
