@@ -567,6 +567,7 @@ void dt_control_init(dt_control_t *s)
       sqlite3_exec(dt_database_get(darktable.db),
       "alter table film_rolls add column external_drive varchar(1024)",
       NULL, NULL, NULL);
+
       // add column for blendops
       sqlite3_exec(dt_database_get(darktable.db),
 	  "alter table history add column blendop_params blob",
