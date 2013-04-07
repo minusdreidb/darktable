@@ -2,6 +2,7 @@
     This file is part of darktable,
     copyright (c) 2009--2012 johannes hanika.
     copyright (c) 2010--2012 henrik andersson.
+    copyright (c) 2010--2012 tobias ellinghaus.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -39,6 +40,7 @@
 #include "develop/blend.h"
 #include "libs/lib.h"
 #include "views/view.h"
+#include "views/undo.h"
 #include "control/control.h"
 #include "control/jobs/control_jobs.h"
 #include "control/signal.h"
@@ -55,8 +57,13 @@
 #include <sys/param.h>
 #include <unistd.h>
 #include <locale.h>
+#include <xmmintrin.h>
+#ifdef HAVE_GRAPHICSMAGICK
+#include <magick/api.h>
+#endif
+#include "dbus.h"
 
-#if !defined(__APPLE__) && !defined(__FreeBSD__)
+#if !defined(__APPLE__) && !defined(__FreeBSD__) && !defined(__OpenBSD__) && !defined(__DragonFly__)
 #include <malloc.h>
 #endif
 #ifdef __APPLE__
@@ -71,11 +78,18 @@
 #endif
 
 darktable_t darktable;
-const char dt_supported_extensions[] = "3fr,arw,bay,bmq,cap,cine,cr2,crw,cs1,dc2,dcr,dng,erf,fff,exr,ia,iiq,jpg,jpeg,k25,kc2,kdc,mdc,mef,mos,mrw,nef,nrw,orf,pef,pfm,pxn,qtk,raf,raw,rdc,rw2,rwl,sr2,srf,srw,sti,tif,tiff,x3f";
+const char dt_supported_extensions[] = "3fr,arw,bay,bmq,cap,cine,cr2,crw,cs1,dc2,dcr,dng,erf,fff,exr,ia,iiq,jpeg,jpg,k25,kc2,kdc,mdc,mef,mos,mrw,nef,nrw,orf,pef,pfm,pxn,qtk,raf,raw,rdc,rw2,rwl,sr2,srf,srw,sti,tif,tiff,x3f,png"
+#ifdef HAVE_OPENJPEG
+",j2c,j2k,jp2,jpc"
+#endif
+#ifdef HAVE_GRAPHICSMAGICK
+",gif,jpc,jp2,bmp,dcm,jng,miff,mng,pbm,pnm,ppm,pgm"
+#endif
+;
 
 static int usage(const char *argv0)
 {
-  printf("usage: %s [-d {all,cache,camctl,control,dev,fswatch,memory,opencl,perf,pwstorage,sql}] [IMG_1234.{RAW,..}|image_folder/]", argv0);
+  printf("usage: %s [-d {all,cache,camctl,control,dev,fswatch,lighttable,memory,nan,opencl,perf,pwstorage,sql}] [IMG_1234.{RAW,..}|image_folder/]", argv0);
 #ifdef HAVE_OPENCL
   printf(" [--disable-opencl]");
 #endif
@@ -90,13 +104,14 @@ static int usage(const char *argv0)
   return 1;
 }
 
+#ifndef __APPLE__
 typedef void (dt_signal_handler_t)(int) ;
 // static dt_signal_handler_t *_dt_sigill_old_handler = NULL;
 static dt_signal_handler_t *_dt_sigsegv_old_handler = NULL;
+#endif
 
-#if (defined(__APPLE__) && defined(APPLE_NEED_DPRINTF)) ||        \
-  (defined(__FreeBSD_version) && (__FreeBSD_version < 800071)) || \
-  defined(__SUNOS__)
+#if (defined(__FreeBSD_version) && (__FreeBSD_version < 800071)) || \
+  (defined(OpenBSD) && (OpenBSD < 201305)) || defined(__SUNOS__)
 static int dprintf(int fd,const char *fmt, ...)
 {
   va_list ap;
@@ -109,6 +124,7 @@ static int dprintf(int fd,const char *fmt, ...)
 }
 #endif
 
+#ifndef __APPLE__
 static
 void _dt_sigsegv_handler(int param)
 {
@@ -117,13 +133,13 @@ void _dt_sigsegv_handler(int param)
   gchar *name_used;
   int fout;
   gboolean delete_file = FALSE;
-  char datadir[1024];
+  char datadir[DT_MAX_PATH_LEN];
 
   if((fout = g_file_open_tmp("darktable_bt_XXXXXX.txt", &name_used, NULL)) == -1)
     fout = STDOUT_FILENO; // just print everything to stdout
 
   dprintf(fout, "this is %s reporting a segfault:\n\n", PACKAGE_STRING);
-  dt_loc_get_datadir(datadir, 1024);
+  dt_loc_get_datadir(datadir, DT_MAX_PATH_LEN);
   gchar *command = g_strdup_printf("gdb %s %d -batch -x %s/gdb_commands", darktable.progname, (int)getpid(), datadir);
 
   if((fd = popen(command, "r")) != NULL)
@@ -162,88 +178,17 @@ void _dt_sigsegv_handler(int param)
   /* pass it further to the old handler*/
   _dt_sigsegv_old_handler(param);
 }
-
-#if 0
-static
-void _dt_sigill_handler(int param)
-{
-  fprintf(stderr, "[this doesn't seem to work]\n");
-  GtkWidget *dlg = gtk_message_dialog_new(NULL,GTK_DIALOG_MODAL,GTK_MESSAGE_ERROR,GTK_BUTTONS_OK,_(
-"darktable has trapped an illegal instruction which probably means that \
-an invalid processor optimized codepath is used for your cpu, please try reproduce the crash running 'gdb darktable' from \
-the console and post the backtrace log to mailing list with information about your CPU and where you got the package from."));
-  gtk_dialog_run(GTK_DIALOG(dlg));
-
-  /* pass it further to the old handler*/
-  _dt_sigill_old_handler(param);
-}
-
-#if defined(__i386__) && defined(__PIC__)
-#define cpuid(level, a, b, c, d) \
-  __asm__ ("xchgl %%ebx, %1\n" \
-        "cpuid\n" \
-        "xchgl  %%ebx, %1\n" \
-        : "=a" (a), "=r" (b), "=c" (c), "=d" (d)	\
-        : "0" (level) \
-      )
-#else
-#define cpuid(level, a, b, c, d) \
-  __asm__ ("cpuid"	\
-    : "=a" (a), "=b" (b), "=c" (c), "=d" (d) \
-    : "0" (level) \
-    )
 #endif
 
-
-static 
-void dt_check_cpu(int argc,char **argv) 
-{
-  /* hook up SIGILL handler */
-  _dt_sigill_old_handler = signal(SIGILL,&_dt_sigill_handler);
-
-  /* call cpuid for  SSE level */
-  int ax,bx,cx,dx;
-  cpuid(0x1,ax,bx,cx,dx);
-  
-  ax = bx = 0;
-  char message[512]={0};
-  strcat(message,_("SIMD extensions found: "));
-  if((cx & 1) && (darktable.cpu_flags |= DT_CPU_FLAG_SSE3))
-    strcat(message,"SSE3 ");
-  if( ((dx >> 26) & 1) && (darktable.cpu_flags |= DT_CPU_FLAG_SSE2))
-    strcat(message,"SSE2 ");
-  if (((dx >> 25) & 1) && (darktable.cpu_flags |= DT_CPU_FLAG_SSE))
-   strcat(message,"SSE ");
-  if (!darktable.cpu_flags)
-    strcat(message,"none");
- 
-  /* for now, bail out if SSE2 is not availble */
-  if(!(darktable.cpu_flags & DT_CPU_FLAG_SSE2))
-  {
-    gtk_init (&argc, &argv);
-    
-    GtkWidget *dlg = gtk_message_dialog_new(NULL,GTK_DIALOG_MODAL,GTK_MESSAGE_ERROR,GTK_BUTTONS_OK,_(
-"darktable is very cpu intensive and uses SSE2 SIMD instructions \
-for heavy calculations. This gives a better user experience but also defines a minimum \
-processor requirement.\n\nThe processor in YOUR system does NOT support SSE2. \
-darktable will now close down.\n\n%s"),message);
-    
-    gtk_dialog_run(GTK_DIALOG(dlg));
-    
-    exit(11);
-  }
-}
-#endif
-
-/*  TODO: make this case insensitive */
 gboolean dt_supported_image(const gchar *filename)
 {
   gboolean supported = FALSE;
   char **extensions = g_strsplit(dt_supported_extensions, ",", 100);
   char *ext = g_strrstr(filename,".");
   if(!ext) return FALSE;
+  ext++;
   for(char **i=extensions; *i!=NULL; i++)
-    if(!g_ascii_strncasecmp(ext+1, *i,strlen(*i)))
+    if(!g_ascii_strncasecmp(ext, *i,strlen(*i)))
     {
       supported = TRUE;
       break;
@@ -254,13 +199,13 @@ gboolean dt_supported_image(const gchar *filename)
 
 static void strip_semicolons_from_keymap(const char* path)
 {
-  char pathtmp[1024];
+  char pathtmp[DT_MAX_PATH_LEN];
   FILE *fin = fopen(path, "r");
   FILE *fout;
   int i;
   int c = '\0';
 
-  snprintf(pathtmp, 1024, "%s_tmp", path);
+  snprintf(pathtmp, DT_MAX_PATH_LEN, "%s_tmp", path);
   fout = fopen(pathtmp, "w");
 
   // First ignoring the first three lines
@@ -280,18 +225,127 @@ static void strip_semicolons_from_keymap(const char* path)
       c = fgetc(fin);
       if(c != EOF)
         fputc(c, fout);
-    }while(c != '\n' && c != EOF);
+    }
+    while(c != '\n' && c != EOF);
   }
 
   fclose(fin);
   fclose(fout);
-  g_file_delete(g_file_new_for_path(path), NULL, NULL);
-  g_file_move(g_file_new_for_path(pathtmp), g_file_new_for_path(path), 0,
-              NULL, NULL, NULL, NULL);
+
+  GFile *gpath = g_file_new_for_path(path);
+  GFile *gpathtmp = g_file_new_for_path(pathtmp);
+
+  g_file_delete(gpath, NULL, NULL);
+  g_file_move(gpathtmp, gpath, 0, NULL, NULL, NULL, NULL);
+  g_object_unref(gpath);
+  g_object_unref(gpathtmp);
+}
+
+static gchar * dt_make_path_absolute(const gchar * input)
+{
+  gchar *filename = NULL;
+
+  if(g_str_has_prefix(input, "file://")) // in this case we should take care of %XX encodings in the string (for example %20 = ' ')
+  {
+    input += strlen("file://");
+    filename = g_uri_unescape_string(input, NULL);
+  }
+  else
+    filename = g_strdup(input);
+
+  if(g_path_is_absolute(filename) == FALSE)
+  {
+    char* current_dir = g_get_current_dir();
+    char* tmp_filename = g_build_filename(current_dir, filename, NULL);
+    g_free(filename);
+    filename = (char*)g_malloc(sizeof(char)*MAXPATHLEN);
+    if(realpath(tmp_filename, filename) == NULL)
+    {
+      g_free(current_dir);
+      g_free(tmp_filename);
+      g_free(filename);
+      return NULL;
+    }
+    g_free(current_dir);
+    g_free(tmp_filename);
+  }
+
+  return filename;
+}
+
+int dt_load_from_string(const gchar* input, gboolean open_image_in_dr)
+{
+  int id = 0;
+  if(input == NULL || input[0] == '\0')
+    return 0;
+
+  char* filename = dt_make_path_absolute(input);
+
+  if(filename == NULL)
+  {
+    dt_control_log(_("found strange path `%s'"), input);
+    return 0;
+  }
+
+  if(g_file_test(filename, G_FILE_TEST_IS_DIR))
+  {
+    // import a directory into a film roll
+    unsigned int last_char = strlen(filename)-1;
+    if(filename[last_char] == '/')
+      filename[last_char] = '\0';
+    id = dt_film_import(filename);
+    if(id)
+    {
+      dt_film_open(id);
+      dt_ctl_switch_mode_to(DT_LIBRARY);
+    }
+    else
+    {
+      dt_control_log(_("error loading directory `%s'"), filename);
+    }
+  }
+  else
+  {
+    // import a single image
+    gchar *directory = g_path_get_dirname((const gchar *)filename);
+    dt_film_t film;
+    const int filmid = dt_film_new(&film, directory);
+    id = dt_image_import(filmid, filename, TRUE);
+    g_free (directory);
+    if(id)
+    {
+      dt_film_open(filmid);
+      // make sure buffers are loaded (load full for testing)
+      dt_mipmap_buffer_t buf;
+      dt_mipmap_cache_read_get(darktable.mipmap_cache, &buf, id, DT_MIPMAP_FULL, DT_MIPMAP_BLOCKING);
+      if(!buf.buf)
+      {
+        id = 0;
+        dt_control_log(_("file `%s' has unknown format!"), filename);
+      }
+      else
+      {
+        dt_mipmap_cache_read_release(darktable.mipmap_cache, &buf);
+        if(open_image_in_dr)
+        {
+          DT_CTL_SET_GLOBAL(lib_image_mouse_over_id, id);
+          dt_ctl_switch_mode_to(DT_DEVELOP);
+        }
+      }
+    }
+    else
+    {
+      dt_control_log(_("error loading file `%s'"), filename);
+    }
+  }
+  g_free(filename);
+  return id;
 }
 
 int dt_init(int argc, char *argv[], const int init_gui)
 {
+  // make everything go a lot faster.
+  _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
 #ifndef __APPLE__
   _dt_sigsegv_old_handler = signal(SIGSEGV,&_dt_sigsegv_handler);
 #endif
@@ -303,33 +357,33 @@ int dt_init(int argc, char *argv[], const int init_gui)
 #endif
 
 #ifdef M_MMAP_THRESHOLD
-  mallopt(M_MMAP_THRESHOLD,128*1024) ; /* use mmap() for large allocations */   
+  mallopt(M_MMAP_THRESHOLD,128*1024) ; /* use mmap() for large allocations */
 #endif
 
   bindtextdomain (GETTEXT_PACKAGE, DARKTABLE_LOCALEDIR);
   bind_textdomain_codeset (GETTEXT_PACKAGE, "UTF-8");
   textdomain (GETTEXT_PACKAGE);
 
-  
+
   // init all pointers to 0:
   memset(&darktable, 0, sizeof(darktable_t));
 
   darktable.progname = argv[0];
-   
+
   // database
   gchar *dbfilename_from_command = NULL;
-  char *datadirFromCommand = NULL;
-  char *moduledirFromCommand = NULL;
-  char *tmpdirFromCommand = NULL;
-  char *configdirFromCommand = NULL;
-  char *cachedirFromCommand = NULL;
+  char *datadir_from_command = NULL;
+  char *moduledir_from_command = NULL;
+  char *tmpdir_from_command = NULL;
+  char *configdir_from_command = NULL;
+  char *cachedir_from_command = NULL;
 
   darktable.num_openmp_threads = 1;
 #ifdef _OPENMP
   darktable.num_openmp_threads = omp_get_num_procs();
 #endif
   darktable.unmuted = 0;
-  char *image_to_load = NULL;
+  GSList *images_to_load = NULL;
   for(int k=1; k<argc; k++)
   {
     if(argv[k][0] == '-')
@@ -344,7 +398,7 @@ int dt_init(int argc, char *argv[], const int init_gui)
       }
       else if(!strcmp(argv[k], "--version"))
       {
-        printf("this is "PACKAGE_STRING"\ncopyright (c) 2009-2012 johannes hanika\n"PACKAGE_BUGREPORT"\n");
+        printf("this is "PACKAGE_STRING"\ncopyright (c) 2009-2013 johannes hanika\n"PACKAGE_BUGREPORT"\n");
         return 1;
       }
       else if(!strcmp(argv[k], "--library"))
@@ -353,23 +407,23 @@ int dt_init(int argc, char *argv[], const int init_gui)
       }
       else if(!strcmp(argv[k], "--datadir"))
       {
-        datadirFromCommand = argv[++k];
+        datadir_from_command = argv[++k];
       }
       else if(!strcmp(argv[k], "--moduledir"))
       {
-        moduledirFromCommand = argv[++k];
+        moduledir_from_command = argv[++k];
       }
       else if(!strcmp(argv[k], "--tmpdir"))
       {
-        tmpdirFromCommand = argv[++k];
+        tmpdir_from_command = argv[++k];
       }
       else if(!strcmp(argv[k], "--configdir"))
       {
-        configdirFromCommand = argv[++k];
+        configdir_from_command = argv[++k];
       }
       else if(!strcmp(argv[k], "--cachedir"))
       {
-        cachedirFromCommand = argv[++k];
+        cachedir_from_command = argv[++k];
       }
       else if(!strcmp(argv[k], "--localedir"))
       {
@@ -377,17 +431,19 @@ int dt_init(int argc, char *argv[], const int init_gui)
       }
       else if(argv[k][1] == 'd' && argc > k+1)
       {
-        if(!strcmp(argv[k+1], "all"))            darktable.unmuted = 0xffffffff;   // enable all debug information
-        else if(!strcmp(argv[k+1], "cache"))     darktable.unmuted |= DT_DEBUG_CACHE;   // enable debugging for lib/film/cache module
-        else if(!strcmp(argv[k+1], "control"))   darktable.unmuted |= DT_DEBUG_CONTROL; // enable debugging for scheduler module
-        else if(!strcmp(argv[k+1], "dev"))       darktable.unmuted |= DT_DEBUG_DEV; // develop module
-        else if(!strcmp(argv[k+1], "fswatch"))   darktable.unmuted |= DT_DEBUG_FSWATCH; // fswatch module
-        else if(!strcmp(argv[k+1], "camctl"))    darktable.unmuted |= DT_DEBUG_CAMCTL; // camera control module
-        else if(!strcmp(argv[k+1], "perf"))      darktable.unmuted |= DT_DEBUG_PERF; // performance measurements
-        else if(!strcmp(argv[k+1], "pwstorage")) darktable.unmuted |= DT_DEBUG_PWSTORAGE; // pwstorage module
-        else if(!strcmp(argv[k+1], "opencl"))    darktable.unmuted |= DT_DEBUG_OPENCL;    // gpu accel via opencl
-        else if(!strcmp(argv[k+1], "sql"))       darktable.unmuted |= DT_DEBUG_SQL; // SQLite3 queries
-        else if(!strcmp(argv[k+1], "memory"))    darktable.unmuted |= DT_DEBUG_MEMORY; // some stats on mem usage now and then.
+        if(!strcmp(argv[k+1], "all"))             darktable.unmuted = 0xffffffff;   // enable all debug information
+        else if(!strcmp(argv[k+1], "cache"))      darktable.unmuted |= DT_DEBUG_CACHE;   // enable debugging for lib/film/cache module
+        else if(!strcmp(argv[k+1], "control"))    darktable.unmuted |= DT_DEBUG_CONTROL; // enable debugging for scheduler module
+        else if(!strcmp(argv[k+1], "dev"))        darktable.unmuted |= DT_DEBUG_DEV; // develop module
+        else if(!strcmp(argv[k+1], "fswatch"))    darktable.unmuted |= DT_DEBUG_FSWATCH; // fswatch module
+        else if(!strcmp(argv[k+1], "camctl"))     darktable.unmuted |= DT_DEBUG_CAMCTL; // camera control module
+        else if(!strcmp(argv[k+1], "perf"))       darktable.unmuted |= DT_DEBUG_PERF; // performance measurements
+        else if(!strcmp(argv[k+1], "pwstorage"))  darktable.unmuted |= DT_DEBUG_PWSTORAGE; // pwstorage module
+        else if(!strcmp(argv[k+1], "opencl"))     darktable.unmuted |= DT_DEBUG_OPENCL;    // gpu accel via opencl
+        else if(!strcmp(argv[k+1], "sql"))        darktable.unmuted |= DT_DEBUG_SQL; // SQLite3 queries
+        else if(!strcmp(argv[k+1], "memory"))     darktable.unmuted |= DT_DEBUG_MEMORY; // some stats on mem usage now and then.
+        else if(!strcmp(argv[k+1], "lighttable")) darktable.unmuted |= DT_DEBUG_LIGHTTABLE; // lighttable related stuff.
+        else if(!strcmp(argv[k+1], "nan"))        darktable.unmuted |= DT_DEBUG_NAN; // check for NANs when processing the pipe.
         else return usage(argv[0]);
         k ++;
       }
@@ -398,10 +454,12 @@ int dt_init(int argc, char *argv[], const int init_gui)
         k ++;
       }
     }
+#ifndef MAC_INTEGRATION
     else
     {
-      image_to_load = argv[k];
+      images_to_load = g_slist_append(images_to_load, argv[k]);
     }
+#endif
   }
 
   if(darktable.unmuted & DT_DEBUG_MEMORY)
@@ -413,16 +471,19 @@ int dt_init(int argc, char *argv[], const int init_gui)
 #ifdef _OPENMP
   omp_set_num_threads(darktable.num_openmp_threads);
 #endif
-  dt_loc_init_datadir(datadirFromCommand);
-  dt_loc_init_plugindir(moduledirFromCommand);
-  if(dt_loc_init_tmp_dir(tmpdirFromCommand)) {
+  dt_loc_init_datadir(datadir_from_command);
+  dt_loc_init_plugindir(moduledir_from_command);
+  if(dt_loc_init_tmp_dir(tmpdir_from_command))
+  {
     printf(_("ERROR : invalid temporary directory : %s\n"),darktable.tmpdir);
     return usage(argv[0]);
   }
-  dt_loc_init_user_config_dir(configdirFromCommand);
-  dt_loc_init_user_cache_dir(cachedirFromCommand);
+  dt_loc_init_user_config_dir(configdir_from_command);
+  dt_loc_init_user_cache_dir(cachedir_from_command);
 
+#if !GLIB_CHECK_VERSION(2, 35, 0)
   g_type_init();
+#endif
 
   // does not work, as gtk is not inited yet.
   // even if it were, it's a super bad idea to invoke gtk stuff from
@@ -431,19 +492,20 @@ int dt_init(int argc, char *argv[], const int init_gui)
   // dt_check_cpu(argc,argv);
 
 #ifdef HAVE_GEGL
-  char geglpath[1024], datadir[1024];
-  dt_loc_get_datadir(datadir, 1024);
-  snprintf(geglpath, 1024, "%s/gegl:/usr/lib/gegl-0.0", datadir);
+  char geglpath[DT_MAX_PATH_LEN];
+  char datadir[DT_MAX_PATH_LEN];
+  dt_loc_get_datadir(datadir, DT_MAX_PATH_LEN);
+  snprintf(geglpath, DT_MAX_PATH_LEN, "%s/gegl:/usr/lib/gegl-0.0", datadir);
   (void)setenv("GEGL_PATH", geglpath, 1);
   gegl_init(&argc, &argv);
 #endif
 
   // thread-safe init:
   dt_exif_init();
-  char datadir[1024];
-  dt_loc_get_user_config_dir (datadir,1024);
-  char filename[1024];
-  snprintf(filename, 1024, "%s/darktablerc", datadir);
+  char datadir[DT_MAX_PATH_LEN];
+  dt_loc_get_user_config_dir (datadir,DT_MAX_PATH_LEN);
+  char filename[DT_MAX_PATH_LEN];
+  snprintf(filename, DT_MAX_PATH_LEN, "%s/darktablerc", datadir);
 
   // intialize the config backend. this needs to be done first...
   darktable.conf = (dt_conf_t *)malloc(sizeof(dt_conf_t));
@@ -460,6 +522,48 @@ int dt_init(int argc, char *argv[], const int init_gui)
 
   // initialize the database
   darktable.db = dt_database_init(dbfilename_from_command);
+  if(darktable.db == NULL)
+  {
+    printf("ERROR : cannot open database\n");
+    return 1;
+  }
+  else if(dt_database_get_already_locked(darktable.db))
+  {
+    // send the images to the other instance via dbus
+    if(images_to_load)
+    {
+      GSList *p = images_to_load;
+
+      // get a connection!
+      GDBusConnection *connection = g_bus_get_sync(G_BUS_TYPE_SESSION,NULL, NULL);
+
+      while (p != NULL)
+      {
+        // make the filename absolute ...
+        gchar *filename = dt_make_path_absolute((gchar*)p->data);
+        if(filename == NULL) continue;
+        // ... and send it to the running instance of darktable
+        g_dbus_connection_call_sync(connection,
+                                    "org.darktable.service",
+                                    "/darktable",
+                                    "org.darktable.service.Remote",
+                                    "Open",
+                                    g_variant_new ("(s)", filename),
+                                    NULL,
+                                    G_DBUS_CALL_FLAGS_NONE,
+                                    -1,
+                                    NULL,
+                                    NULL);
+        p = g_slist_next(p);
+        g_free(filename);
+      }
+
+      g_slist_free(images_to_load);
+      g_object_unref(connection);
+    }
+
+    return 1;
+  }
 
   // Initialize the signal system
   darktable.signals = dt_control_signal_init();
@@ -487,6 +591,7 @@ int dt_init(int argc, char *argv[], const int init_gui)
   // FIXME: move there into dt_database_t
   dt_pthread_mutex_init(&(darktable.db_insert), NULL);
   dt_pthread_mutex_init(&(darktable.plugin_threadsafe), NULL);
+  dt_pthread_mutex_init(&(darktable.capabilities_threadsafe), NULL);
   darktable.control = (dt_control_t *)malloc(sizeof(dt_control_t));
   memset(darktable.control, 0, sizeof(dt_control_t));
   if(init_gui)
@@ -496,7 +601,7 @@ int dt_init(int argc, char *argv[], const int init_gui)
   else
   {
     // this is in memory, so schema can't exist yet.
-    if(!strcmp(dbfilename_from_command, ":memory:"))
+    if(dbfilename_from_command && !strcmp(dbfilename_from_command, ":memory:"))
     {
       dt_control_create_database_schema();
       dt_gui_presets_init(); // also init preset db schema.
@@ -512,6 +617,14 @@ int dt_init(int argc, char *argv[], const int init_gui)
 
   /* initialize sellection */
   darktable.selection = dt_selection_new();
+
+  /* capabilities set to NULL */
+  darktable.capabilities = NULL;
+
+#ifdef HAVE_GRAPHICSMAGICK
+  /* GraphicsMagick init */
+  InitializeMagick(darktable.progname);
+#endif
 
   darktable.opencl = (dt_opencl_t *)malloc(sizeof(dt_opencl_t));
   memset(darktable.opencl, 0, sizeof(dt_opencl_t));
@@ -571,107 +684,53 @@ int dt_init(int argc, char *argv[], const int init_gui)
   if(init_gui)
   {
     // Loading the keybindings
-    char keyfile[1024];
+    char keyfile[DT_MAX_PATH_LEN];
 
     // First dump the default keymapping
-    snprintf(keyfile, 1024, "%s/keyboardrc_default", datadir);
+    snprintf(keyfile, DT_MAX_PATH_LEN, "%s/keyboardrc_default", datadir);
     gtk_accel_map_save(keyfile);
 
     // Removing extraneous semi-colons from the default keymap
     strip_semicolons_from_keymap(keyfile);
 
     // Then load any modified keys if available
-    snprintf(keyfile, 1024, "%s/keyboardrc", datadir);
+    snprintf(keyfile, DT_MAX_PATH_LEN, "%s/keyboardrc", datadir);
     if(g_file_test(keyfile, G_FILE_TEST_EXISTS))
       gtk_accel_map_load(keyfile);
     else
       gtk_accel_map_save(keyfile); // Save the default keymap if none is present
-  }
 
-  int id = 0;
-  if(init_gui && image_to_load)
-  {
-    char* filename;
-    if(g_str_has_prefix(image_to_load, "file://"))
-      image_to_load += strlen("file://");
-    if(g_path_is_absolute(image_to_load) == FALSE)
+    // I doubt that connecting to dbus for darktable-cli makes sense
+    darktable.dbus = dt_dbus_init();
+
+    // initialize undo struct
+    darktable.undo = dt_undo_init();
+
+    // load image(s) specified on cmdline
+    int id = 0;
+    if(images_to_load)
     {
-      char* current_dir = g_get_current_dir();
-      char* tmp_filename = g_build_filename(current_dir, image_to_load, NULL);
-      filename = (char*)g_malloc(sizeof(char)*MAXPATHLEN);
-      if(realpath(tmp_filename, filename) == NULL)
+      // If only one image is listed, attempt to load it in darkroom
+      gboolean load_in_dr = (g_slist_next(images_to_load) == NULL);
+      GSList *p = images_to_load;
+
+      while (p != NULL)
       {
-        dt_control_log(_("found strange path `%s'"), tmp_filename);
-        g_free(current_dir);
-        g_free(tmp_filename);
-        g_free(filename);
-        return 0;
+        // don't put these function calls into MAX(), the macro will evaluate
+        // it twice (and happily deadlock, in this particular case)
+        int newid = dt_load_from_string((gchar*)p->data, load_in_dr);
+        id = MAX(id, newid);
+        p = g_slist_next(p);
       }
-      g_free(current_dir);
-      g_free(tmp_filename);
-    }
-    else
-    {
-      filename = g_strdup(image_to_load);
-    }
 
-    if(g_file_test(filename, G_FILE_TEST_IS_DIR))
-    {
-      // import a directory into a film roll
-      unsigned int last_char = strlen(filename)-1;
-      if(filename[last_char] == '/')
-        filename[last_char] = '\0';
-      id = dt_film_import(filename);
-      if(id)
-      {
-        dt_film_open(id);
+      if (!load_in_dr || id == 0)
         dt_ctl_switch_mode_to(DT_LIBRARY);
-      }
-      else
-      {
-        dt_control_log(_("error loading directory `%s'"), filename);
-      }
+
+      g_slist_free(images_to_load);
     }
     else
-    {
-      // import a single image
-      gchar *directory = g_path_get_dirname((const gchar *)filename);
-      dt_film_t film;
-      const int filmid = dt_film_new(&film, directory);
-      id = dt_image_import(filmid, filename, TRUE);
-      g_free (directory);
-      if(id)
-      {
-        dt_film_open(filmid);
-        // make sure buffers are loaded (load full for testing)
-        dt_mipmap_buffer_t buf;
-        dt_mipmap_cache_read_get(darktable.mipmap_cache, &buf, id, DT_MIPMAP_FULL, DT_MIPMAP_BLOCKING);
-        if(!buf.buf)
-        {
-          id = 0;
-          dt_control_log(_("file `%s' has unknown format!"), filename);
-        }
-        else
-        {
-          dt_mipmap_cache_read_release(darktable.mipmap_cache, &buf);
-          DT_CTL_SET_GLOBAL(lib_image_mouse_over_id, id);
-          dt_ctl_switch_mode_to(DT_DEVELOP);
-        }
-      }
-      else
-      {
-        dt_control_log(_("error loading file `%s'"), filename);
-      }
-    }
-    g_free(filename);
+      dt_ctl_switch_mode_to(DT_LIBRARY);
   }
-  if(init_gui && !id)
-  {
-    dt_ctl_switch_mode_to(DT_LIBRARY);
-  }
-
-  /* start the indexer background job */
-  dt_control_start_indexer();
 
   if(darktable.unmuted & DT_DEBUG_MEMORY)
   {
@@ -689,6 +748,8 @@ void dt_cleanup()
 
   if(init_gui)
   {
+    dt_dbus_destroy(darktable.dbus);
+
     dt_control_write_config(darktable.control);
     dt_control_shutdown(darktable.control);
 
@@ -712,6 +773,7 @@ void dt_cleanup()
   {
     dt_control_cleanup(darktable.control);
     free(darktable.control);
+    dt_undo_cleanup(darktable.undo);
   }
   dt_conf_cleanup(darktable.conf);
   free(darktable.conf);
@@ -726,12 +788,19 @@ void dt_cleanup()
   dt_pwstorage_destroy(darktable.pwstorage);
   dt_fswatch_destroy(darktable.fswatch);
 
+#ifdef HAVE_GRAPHICSMAGICK
+  DestroyMagick();
+#endif
+
   dt_database_destroy(darktable.db);
 
   dt_bauhaus_cleanup();
- 
+
+  dt_capabilities_cleanup();
+
   dt_pthread_mutex_destroy(&(darktable.db_insert));
   dt_pthread_mutex_destroy(&(darktable.plugin_threadsafe));
+  dt_pthread_mutex_destroy(&(darktable.capabilities_threadsafe));
 
   dt_exif_cleanup();
 #ifdef HAVE_GEGL
@@ -799,10 +868,11 @@ void dt_show_times(const dt_times_t *start, const char *prefix, const char *suff
 
 void dt_configure_defaults()
 {
+  const int atom_cores = dt_get_num_atom_cores();
   const int threads = dt_get_num_threads();
   const size_t mem = dt_get_total_memory();
   const int bits = (sizeof(void*) == 4) ? 32 : 64;
-  fprintf(stderr, "[defaults] found a %d-bit system with %zu kb ram and %d cores\n", bits, mem, threads);
+  fprintf(stderr, "[defaults] found a %d-bit system with %zu kb ram and %d cores (%d atom based)\n", bits, mem, threads, atom_cores);
   if(mem > (2u<<20) && threads > 4)
   {
     fprintf(stderr, "[defaults] setting high quality defaults\n");
@@ -810,16 +880,66 @@ void dt_configure_defaults()
     dt_conf_set_int("cache_memory", 1u<<30);
     dt_conf_set_int("plugins/lighttable/thumbnail_width", 1300);
     dt_conf_set_int("plugins/lighttable/thumbnail_height", 1000);
+    dt_conf_set_bool("plugins/lighttable/low_quality_thumbnails", FALSE);
   }
-  if(mem < (1u<<20) || threads <= 2 || bits < 64)
+  if(mem < (1u<<20) || threads <= 2 || bits < 64 || atom_cores > 0)
   {
     fprintf(stderr, "[defaults] setting very conservative defaults\n");
     dt_conf_set_int("worker_threads", 1);
-    dt_conf_set_int("cache_memory", 200u<<10);
+    dt_conf_set_int("cache_memory", 200u<<20);
+    dt_conf_set_int("host_memory_limit", 500);
+    dt_conf_set_int("singlebuffer_limit", 8);
     dt_conf_set_int("plugins/lighttable/thumbnail_width", 800);
     dt_conf_set_int("plugins/lighttable/thumbnail_height", 500);
+    dt_conf_set_string("plugins/darkroom/demosaic/quality", "always bilinear (fast)");
+    dt_conf_set_bool("plugins/lighttable/low_quality_thumbnails", TRUE);
   }
 }
+
+
+int dt_capabilities_check(char *capability)
+{
+  GList *capabilities = darktable.capabilities;
+
+  while(capabilities)
+  {
+    if(!strcmp(capabilities->data, capability))
+    {
+      return TRUE;
+    }
+    capabilities = g_list_next(capabilities);
+  }
+  return FALSE;
+}
+
+
+void dt_capabilities_add(char *capability)
+{
+  dt_pthread_mutex_lock(&darktable.capabilities_threadsafe);
+
+  if(!dt_capabilities_check(capability))
+    darktable.capabilities = g_list_append(darktable.capabilities, capability);
+
+  dt_pthread_mutex_unlock(&darktable.capabilities_threadsafe);
+}
+
+
+void dt_capabilities_remove(char *capability)
+{
+  dt_pthread_mutex_lock(&darktable.capabilities_threadsafe);
+
+  darktable.capabilities = g_list_remove(darktable.capabilities, capability);
+
+  dt_pthread_mutex_unlock(&darktable.capabilities_threadsafe);
+}
+
+
+void dt_capabilities_cleanup()
+{
+  while(darktable.capabilities)
+    darktable.capabilities = g_list_delete_link(darktable.capabilities, darktable.capabilities);
+}
+
 
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
 // vim: shiftwidth=2 expandtab tabstop=2 cindent

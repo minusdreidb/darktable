@@ -29,7 +29,7 @@
 #include "develop/pixelpipe.h"
 #include "common/opencl.h"
 
-#define DEVELOP_BLEND_VERSION				(3)
+#define DEVELOP_BLEND_VERSION				(4)
 
 
 #define DEVELOP_BLEND_MASK_FLAG		  0x80
@@ -55,6 +55,7 @@
 #define DEVELOP_BLEND_COLOR				  0x13
 #define DEVELOP_BLEND_INVERSE				0x14
 #define DEVELOP_BLEND_UNBOUNDED     0x15
+#define DEVELOP_BLEND_COLORADJUST   0x16
 
 
 typedef enum dt_develop_blendif_channels_t
@@ -101,6 +102,16 @@ typedef enum dt_develop_blendif_channels_t
 dt_develop_blendif_channels_t;
 
 
+/** blend legacy parameters version 1 */
+typedef struct dt_develop_blend_params1_t
+{
+  uint32_t mode;
+  float opacity;
+  uint32_t mask_id;
+}
+dt_develop_blend_params1_t;
+
+
 typedef struct dt_develop_blend_params2_t
 {
   /** blending mode */
@@ -117,7 +128,7 @@ typedef struct dt_develop_blend_params2_t
 dt_develop_blend_params2_t;
 
 
-typedef struct dt_develop_blend_params_t
+typedef struct dt_develop_blend_params3_t
 {
   /** blending mode */
   uint32_t mode;
@@ -130,28 +141,41 @@ typedef struct dt_develop_blend_params_t
   /** blendif parameters */
   float blendif_parameters[4*DEVELOP_BLENDIF_SIZE];
 }
+dt_develop_blend_params3_t;
+
+
+typedef struct dt_develop_blend_params_t
+{
+  /** blending mode */
+  uint32_t mode;
+  /** mixing opacity */
+  float opacity;
+  /** id of mask in current pipeline */
+  uint32_t mask_id;
+  /** blendif mask */
+  uint32_t blendif;
+  /** blur radius */
+  float radius;
+  /** blendif parameters */
+  float blendif_parameters[4*DEVELOP_BLENDIF_SIZE];
+}
 dt_develop_blend_params_t;
 
 
 
 typedef struct dt_blendop_t
 {
+  int kernel_blendop_mask_Lab;
+  int kernel_blendop_mask_RAW;
+  int kernel_blendop_mask_rgb;
   int kernel_blendop_Lab;
   int kernel_blendop_RAW;
   int kernel_blendop_rgb;
   int kernel_blendop_copy_alpha;
+  int kernel_blendop_set_mask;
 }
 dt_blendop_t;
 
-
-/** blend legacy parameters version 1 */
-typedef struct dt_develop_blend_params1_t
-{
-  uint32_t mode;
-  float opacity;
-  uint32_t mask_id;
-}
-dt_develop_blend_params1_t;
 
 
 typedef struct dt_iop_gui_blendop_modes_t
@@ -174,6 +198,8 @@ dt_iop_gui_blendif_colorstop_t;
 typedef struct dt_iop_gui_blend_data_t
 {
   int blendif_support;
+  int blend_inited;
+  int blendif_inited;
   dt_iop_colorspace_type_t csp;
   dt_iop_module_t *module;
   dt_iop_gui_blendop_modes_t modes[30];
@@ -190,9 +216,13 @@ typedef struct dt_iop_gui_blend_data_t
   GtkLabel *lower_picker_label;
   GtkWidget *upper_polarity;
   GtkWidget *lower_polarity;
+  GtkWidget *colorpicker;
+  GtkWidget *showmask;
+  GtkWidget *suppress;
   void (*scale_print[8])(float value, char *string, int n);
   GtkWidget *blend_modes_combo;
   GtkWidget *opacity_slider;
+  GtkWidget *radius_slider;
   int tab;
   int channels[8][2];
   GtkNotebook* channel_tabs;
@@ -222,7 +252,9 @@ int dt_develop_blend_legacy_params (dt_iop_module_t *module, const void *const o
 /** gui related stuff */
 void dt_iop_gui_init_blendif(GtkVBox *blendw, dt_iop_module_t *module);
 void dt_iop_gui_init_blending(GtkWidget *iopw, dt_iop_module_t *module);
+void dt_iop_gui_update_blending(dt_iop_module_t *module);
 void dt_iop_gui_update_blendif(dt_iop_module_t *module);
+void dt_iop_gui_cleanup_blending(dt_iop_module_t *module);
 
 /** routine to translate from mode id to sequence in option list */
 int dt_iop_gui_blending_mode_seq(dt_iop_gui_blend_data_t *bd, int mode);

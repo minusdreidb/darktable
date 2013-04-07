@@ -34,8 +34,6 @@
 #include <unistd.h>
 #include <curl/curl.h>
 #include <flickcurl.h>
-#include <libxml/parser.h>
-#include <libxml/xpath.h>
 
 DT_MODULE(1)
 
@@ -249,14 +247,11 @@ _flickr_api_context_t static *_flickr_api_authenticate(dt_storage_flickr_gui_dat
         dt_print(DT_DEBUG_PWSTORAGE,"[flickr] user cancelled the login process\n");
         return NULL;
     }
-
-
   }
 
   if (perms)
-  {
     free(perms);
-  }
+
   return NULL;
 }
 
@@ -480,7 +475,7 @@ gui_init (dt_imageio_module_storage_t *self)
   ui->label4 = GTK_LABEL(  gtk_label_new( NULL ) );
 
   set_status(ui,_("click login button to start"), "#ffffff");
-  
+
   ui->label5 = GTK_LABEL(  gtk_label_new( _("title") ) );
   ui->label6 = GTK_LABEL(  gtk_label_new( _("summary") ) );
   gtk_misc_set_alignment(GTK_MISC(ui->label1),      0.0, 0.5);
@@ -493,9 +488,9 @@ gui_init (dt_imageio_module_storage_t *self)
   ui->entry3 = GTK_ENTRY( gtk_entry_new() );  // Album title
   ui->entry4 = GTK_ENTRY( gtk_entry_new() );  // Album summary
 
-  dt_gui_key_accel_block_on_focus (GTK_WIDGET (ui->entry1));
-  dt_gui_key_accel_block_on_focus (GTK_WIDGET (ui->entry3));
-  dt_gui_key_accel_block_on_focus (GTK_WIDGET (ui->entry4));
+  dt_gui_key_accel_block_on_focus_connect (GTK_WIDGET (ui->entry1));
+  dt_gui_key_accel_block_on_focus_connect (GTK_WIDGET (ui->entry3));
+  dt_gui_key_accel_block_on_focus_connect (GTK_WIDGET (ui->entry4));
 
   /*
     gtk_widget_add_events(GTK_WIDGET(ui->entry1), GDK_FOCUS_CHANGE_MASK);
@@ -522,19 +517,11 @@ gui_init (dt_imageio_module_storage_t *self)
   GtkWidget *albumlist=gtk_hbox_new(FALSE,0);
   ui->comboBox1=GTK_COMBO_BOX( gtk_combo_box_new_text()); // Available albums
 
-  GList *renderers = gtk_cell_layout_get_cells(GTK_CELL_LAYOUT(ui->comboBox1));
-  GList *it = renderers;
-  while(it)
-  {
-    GtkCellRendererText *tr = GTK_CELL_RENDERER_TEXT(it->data);
-    g_object_set(G_OBJECT(tr), "ellipsize", PANGO_ELLIPSIZE_MIDDLE, (char *)NULL);
-    it = g_list_next(it);
-  }
-  g_list_free(renderers);
+  dt_ellipsize_combo(ui->comboBox1);
 
   ui->dtbutton1 = DTGTK_BUTTON( dtgtk_button_new(dtgtk_cairo_paint_refresh,0) );
   g_object_set(G_OBJECT(ui->dtbutton1), "tooltip-text", _("refresh album list"), (char *)NULL);
-  
+
   ui->button = GTK_BUTTON(gtk_button_new_with_label(_("login")));
   g_object_set(G_OBJECT(ui->button), "tooltip-text", _("Flickr login"), (char *)NULL);
 
@@ -594,7 +581,7 @@ gui_init (dt_imageio_module_storage_t *self)
   g_signal_connect(G_OBJECT(ui->comboBox1), "changed", G_CALLBACK(flickr_album_changed), (gpointer)ui);
 
   /**
- dont' populate the combo on startup, save 3 second
+  dont' populate the combo on startup, save 3 second
 
   // If username and password is stored, let's populate the combo
   if( _username && _password )
@@ -612,6 +599,11 @@ gui_init (dt_imageio_module_storage_t *self)
 void
 gui_cleanup (dt_imageio_module_storage_t *self)
 {
+  dt_storage_flickr_gui_data_t *ui = self->gui_data;
+  dt_gui_key_accel_block_on_focus_disconnect (GTK_WIDGET (ui->entry1));
+  dt_gui_key_accel_block_on_focus_disconnect (GTK_WIDGET (ui->entry3));
+  dt_gui_key_accel_block_on_focus_disconnect (GTK_WIDGET (ui->entry4));
+  g_free(self->gui_data);
 }
 
 void
@@ -620,7 +612,8 @@ gui_reset (dt_imageio_module_storage_t *self)
 }
 
 int
-store (dt_imageio_module_data_t *sdata, const int imgid, dt_imageio_module_format_t *format, dt_imageio_module_data_t *fdata, const int num, const int total)
+store (dt_imageio_module_data_t *sdata, const int imgid, dt_imageio_module_format_t *format, dt_imageio_module_data_t *fdata,
+       const int num, const int total, const gboolean high_quality)
 {
   gint result=1;
   dt_storage_flickr_params_t *p=(dt_storage_flickr_params_t *)sdata;
@@ -670,7 +663,7 @@ store (dt_imageio_module_data_t *sdata, const int imgid, dt_imageio_module_forma
   }
   dt_image_cache_read_release(darktable.image_cache, img);
 
-  if(dt_imageio_export(imgid, fname, format, fdata) != 0)
+  if(dt_imageio_export(imgid, fname, format, fdata, high_quality) != 0)
   {
     fprintf(stderr, "[imageio_storage_flickr] could not export to file: `%s'!\n", fname);
     dt_control_log(_("could not export to file `%s'!"), fname);
@@ -681,13 +674,16 @@ store (dt_imageio_module_data_t *sdata, const int imgid, dt_imageio_module_forma
 #ifdef _OPENMP
   #pragma omp critical
 #endif
-//TODO: Check if this could be done in threads, so we enhace export time by using
-//      upload time for one image to export another image to disk.
-  // Upload image
-  // Do we export tags?
-  if( p->export_tags == TRUE )
-    tags = imgid;
-  photo_status = _flickr_api_upload_photo( p, fname, caption, description, tags );
+  {
+    //TODO: Check if this could be done in threads, so we enhace export time by using
+    //      upload time for one image to export another image to disk.
+    // Upload image
+    // Do we export tags?
+    if( p->export_tags == TRUE )
+      tags = imgid;
+    photo_status = _flickr_api_upload_photo( p, fname, caption, description, tags );
+  }
+
   if( !photo_status )
   {
     result=0;

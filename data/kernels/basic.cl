@@ -16,19 +16,9 @@
     along with darktable.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-const sampler_t sampleri =  CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
-const sampler_t samplerf =  CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_LINEAR;
+#include "common.h"
 
-#ifndef M_PI
-#define M_PI           3.14159265358979323846  // should be defined by the OpenCL compiler acc. to standard
-#endif
-
-int
-FC(const int row, const int col, const unsigned int filters)
-{
-  return filters >> ((((row) << 1 & 14) + ((col) & 1)) << 1) & 3;
-}
-
+#include "colorspace.cl"
 
 kernel void
 whitebalance_1ui(read_only image2d_t in, write_only image2d_t out, const int width, const int height, global float *coeffs,
@@ -76,66 +66,10 @@ exposure (read_only image2d_t in, write_only image2d_t out, const int width, con
   write_imagef (out, (int2)(x, y), pixel);
 }
 
-/* helpers for the highlights plugin: convert to lch. */
-
-constant float xyz_rgb[9] = {  /* XYZ from RGB */
-	  0.412453, 0.357580, 0.180423,
-	  0.212671, 0.715160, 0.072169,
-	  0.019334, 0.119193, 0.950227};
-constant float rgb_xyz[9] = {  /* RGB from XYZ */
-	  3.24048, -1.53715, -0.498536,
-	  -0.969255, 1.87599, 0.0415559,
-	  0.0556466, -0.204041, 1.05731};
-
-void
-rgb_to_lch (float *rgb, float *lch)
-{
-	float xyz[3], lab[3];
-	xyz[0] = xyz[1] = xyz[2] = 0.0f;
-	for (int c=0; c<3; c++)
-		for (int cc=0; cc<3; cc++)
-			xyz[cc] += xyz_rgb[3*cc+c] * rgb[c];
-	for (int c=0; c<3; c++)
-		xyz[c] = xyz[c] > 0.008856f ? native_powr(xyz[c], 1.0f/3.0f) : 7.787f*xyz[c] + 16.0f/116.0f;
-	lab[0] = 116.0f * xyz[1] - 16.0f;
-	lab[1] = 500.0f * (xyz[0] - xyz[1]);
-	lab[2] = 200.0f * (xyz[1] - xyz[2]);
-
-	lch[0] = lab[0];
-	lch[1] = native_sqrt(lab[1]*lab[1]+lab[2]*lab[2]);
-	lch[2] = atan2(lab[2], lab[1]);
-}
-
-// convert CIE-LCh to linear RGB
-void
-lch_to_rgb(float *lch, float *rgb)
-{
-	float xyz[3], lab[3];
-	const float epsilon = 0.008856f, kappa = 903.3f;
-	lab[0] = lch[0];
-	lab[1] = lch[1] * native_cos(lch[2]);
-	lab[2] = lch[1] * native_sin(lch[2]);
-	xyz[1] = (lab[0]<=kappa*epsilon) ?
-		(lab[0]/kappa) : (native_powr((lab[0]+16.0f)/116.0f, 3.0f));
-	const float fy = (xyz[1]<=epsilon) ? ((kappa*xyz[1]+16.0f)/116.0f) : ((lab[0]+16.0f)/116.0f);
-	const float fz = fy - lab[2]/200.0f;
-	const float fx = lab[1]/500.0f + fy;
-	xyz[2] = (native_powr(fz, 3.0f)<=epsilon) ? ((116.0f*fz-16.0f)/kappa) : (native_powr(fz, 3.0f));
-	xyz[0] = (native_powr(fx, 3.0f)<=epsilon) ? ((116.0f*fx-16.0f)/kappa) : (native_powr(fx, 3.0f));
-
-	for (int c=0; c<3; c++)
-	{
-		float tmpf = 0.0f;
-		for (int cc=0; cc<3; cc++)
-			tmpf += rgb_xyz[3*c+cc] * xyz[cc];
-		rgb[c] = fmax(tmpf, 0.0f);
-	}
-}
-
 /* kernel for the highlights plugin. */
 kernel void
-highlights (read_only image2d_t in, write_only image2d_t out, const int width, const int height,
-            const int mode, const float clip, const float blendL, const float blendC, const float blendh)
+highlights_4f (read_only image2d_t in, write_only image2d_t out, const int width, const int height,
+               const int mode, const float clip)
 {
   const int x = get_global_id(0);
   const int y = get_global_id(1);
@@ -143,24 +77,66 @@ highlights (read_only image2d_t in, write_only image2d_t out, const int width, c
   if(x >= width || y >= height) return;
 
   float4 pixel = read_imagef(in, sampleri, (int2)(x, y));
-  float4 inc, lchi, lchc, lch;
   switch(mode)
   {
     case 1: // DT_IOP_HIGHLIGHTS_LCH
-      inc.x = fmin(clip, pixel.x);
-      inc.y = fmin(clip, pixel.y);
-      inc.z = fmin(clip, pixel.z);
-      rgb_to_lch((float *)&pixel, (float *)&lchi);
-      rgb_to_lch((float *)&inc, (float *)&lchc);
-      lch.x = lchc.x + blendL * (lchi.x - lchc.x);
-      lch.y = lchc.y + blendC * (lchi.y - lchc.y);
-      lch.z = lchc.z + blendh * (lchi.z - lchc.z);
-      lch_to_rgb((float *)&lch, (float *)&pixel);
+      if(pixel.x > clip || pixel.y > clip || pixel.z > clip)
+        pixel.x = pixel.y = pixel.z = 0.299f * pixel.x + 0.587f * pixel.y + 0.144f*pixel.z;
       break;
     default: // 0, DT_IOP_HIGHLIGHTS_CLIP
       pixel.x = fmin(clip, pixel.x);
       pixel.y = fmin(clip, pixel.y);
       pixel.z = fmin(clip, pixel.z);
+      break;
+  }
+  write_imagef (out, (int2)(x, y), pixel);
+}
+
+kernel void
+highlights_1f (read_only image2d_t in, write_only image2d_t out, const int width, const int height,
+               const int mode, const float clip, const int rx, const int ry, const int filters)
+{
+  const int x = get_global_id(0);
+  const int y = get_global_id(1);
+
+  if(x >= width || y >= height) return;
+
+  // just carry over other 3 channels:
+  float4 pixel = read_imagef(in, sampleri, (int2)(x, y));
+  float lum[3] = {0.299f, 0.587f, 0.144f};
+  float accum[3] = {0.0f, 0.0f, 0.0f};
+  int cnt[3] = {0, 0, 0};
+
+  switch(mode)
+  {
+    case 1: // DT_IOP_HIGHLIGHTS_LCH
+      if(pixel.x > clip)
+      {
+        // go through all 9 neighbours
+        for(int jj=-1;jj<=1;jj++)
+        {
+          for(int ii=-1;ii<=1;ii++)
+          {
+            float px = read_imagef(in, sampleri, (int2)(x+ii, y+jj)).x;
+            if(px > clip)
+            {
+              int c = FC(ry+y+jj, rx+x+ii, filters);
+              accum[c] += lum[c]*px;
+              cnt[c] ++;
+            }
+          }
+        }
+        if(cnt[0] && cnt[1] && cnt[2])
+        {
+          pixel.x = 0.0f;
+          for(int c=0;c<3;c++)
+            pixel.x += accum[c]/cnt[c];
+        }
+        else pixel.x = clip;
+      }
+      break;
+    default: // 0, DT_IOP_HIGHLIGHTS_CLIP
+      pixel.x = fmin(clip, pixel.x);
       break;
   }
   write_imagef (out, (int2)(x, y), pixel);
@@ -211,17 +187,6 @@ basecurve (read_only image2d_t in, write_only image2d_t out, const int width, co
 }
 
 
-void
-XYZ_to_Lab(float *xyz, float *lab)
-{
-  xyz[0] *= (1.0f/0.9642f);
-  xyz[2] *= (1.0f/0.8242f);
-	for (int c=0; c<3; c++)
-		xyz[c] = xyz[c] > 0.008856f ? native_powr(xyz[c], 1.0f/3.0f) : 7.787f*xyz[c] + 16.0f/116.0f;
-	lab[0] = 116.0f * xyz[1] - 16.0f;
-	lab[1] = 500.0f * (xyz[0] - xyz[1]);
-	lab[2] = 200.0f * (xyz[1] - xyz[2]);
-}
 
 /* kernel for the plugin colorin */
 kernel void
@@ -237,7 +202,7 @@ colorin (read_only image2d_t in, write_only image2d_t out, const int width, cons
 
   float4 pixel = read_imagef(in, sampleri, (int2)(x, y));
 
-  float cam[3], XYZ[3], Lab[3];
+  float cam[3], XYZ[3];
   cam[0] = lookup_unbounded(lutr, pixel.x, a);
   cam[1] = lookup_unbounded(lutg, pixel.y, a+3);
   cam[2] = lookup_unbounded(lutb, pixel.z, a+6);
@@ -265,7 +230,8 @@ colorin (read_only image2d_t in, write_only image2d_t out, const int width, cons
     XYZ[j] = 0.0f;
     for(int i=0;i<3;i++) XYZ[j] += mat[3*j+i] * cam[i];
   }
-  XYZ_to_Lab(XYZ, (float *)&pixel);
+  float4 xyz = (float4)(XYZ[0], XYZ[1], XYZ[2], 0.0f);
+  pixel.xyz = XYZ_to_Lab(xyz).xyz;
   write_imagef (out, (int2)(x, y), pixel);
 }
 
@@ -339,6 +305,29 @@ backtransform(float2 *p, float2 *o, const float4 m, const float2 t)
   mul_mat_vec_2(m, p, o);
 }
 
+void
+keystone_backtransform(float2 *i, const float4 k_space, const float2 ka, const float4 ma, const float2 mb)
+{
+  float xx = (*i).x - k_space.x;
+  float yy = (*i).y - k_space.y;
+  
+  /*float u = ka.x-kb.x+kc.x-kd.x;
+  float v = ka.x-kb.x;
+  float w = ka.x-kd.x;
+  float z = ka.x;
+  //(*i).x = (xx/k_space.z)*(yy/k_space.w)*(ka.x-kb.x+kc.x-kd.x) - (xx/k_space.z)*(ka.x-kb.x) - (yy/k_space.w)*(ka.x-kd.x) + ka.x + k_space.x;
+  (*i).x = (xx/k_space.z)*(yy/k_space.w)*u - (xx/k_space.z)*v - (yy/k_space.w)*w + z + k_space.x;
+  u = ka.y-kb.y+kc.y-kd.y;
+  v = ka.y-kb.y;
+  w = ka.y-kd.y;
+  z = ka.y;
+  //(*i).y = (xx/k_space.z)*(yy/k_space.w)*(ka.y-kb.y+kc.y-kd.y) - (xx/k_space.z)*(ka.y-kb.y) - (yy/k_space.w)*(ka.y-kd.y) + ka.y + k_space.y;
+  (*i).y = (xx/k_space.z)*(yy/k_space.w)*u - (xx/k_space.z)*v - (yy/k_space.w)*w + z + k_space.y;*/
+  float div = ((ma.z*xx-ma.x*yy)*mb.y+(ma.y*yy-ma.w*xx)*mb.x+ma.x*ma.w-ma.y*ma.z);
+  
+  (*i).x = (ma.w*xx-ma.y*yy)/div + ka.x;
+  (*i).y =-(ma.z*xx-ma.x*yy)/div + ka.y;
+}
 
 
 float
@@ -360,7 +349,7 @@ interpolation_func_lanczos(float width, float t)
 {
   float ta = fabs(t);
 
-  float r = (ta > width) ? 0.0f : ((ta < DT_LANCZOS_EPSILON) ? 1.0f : width*native_sin(M_PI*t)*native_sin(M_PI*t/width)/(M_PI*M_PI*t*t));
+  float r = (ta > width) ? 0.0f : ((ta < DT_LANCZOS_EPSILON) ? 1.0f : width*native_sin(M_PI_F*t)*native_sin(M_PI_F*t/width)/(M_PI_F*M_PI_F*t*t));
 
   return r;
 }
@@ -368,10 +357,10 @@ interpolation_func_lanczos(float width, float t)
 float
 sinf_fast(float t)
 {
-  const float a = 4/(M_PI*M_PI);
+  const float a = 4.0f/(M_PI_F*M_PI_F);
   const float p = 0.225f;
 
-  t = a*t*(M_PI - fabs(t));
+  t = a*t*(M_PI_F - fabs(t));
 
   return p*(t*fabs(t) - t) + t;
 }
@@ -388,7 +377,7 @@ interpolation_func_lanczos(float width, float t)
   union { float f; unsigned int i; } sign;
   sign.i = ((a&1)<<31) | 0x3f800000;
 
-  return (DT_LANCZOS_EPSILON + width*sign.f*sinf_fast(M_PI*r)*sinf_fast(M_PI*t/width))/(DT_LANCZOS_EPSILON + M_PI*M_PI*t*t);
+  return (DT_LANCZOS_EPSILON + width*sign.f*sinf_fast(M_PI_F*r)*sinf_fast(M_PI_F*t/width))/(DT_LANCZOS_EPSILON + M_PI_F*M_PI_F*t*t);
 }
 #endif
 
@@ -397,8 +386,9 @@ interpolation_func_lanczos(float width, float t)
 __kernel void
 clip_rotate_bilinear(read_only image2d_t in, write_only image2d_t out, const int width, const int height, 
             const int in_width, const int in_height,
-            const int2 roi_in, const int2 roi_out, const float scale_in, const float scale_out,
-            const int flip, const float2 ci, const float2 t, const float2 k, const float4 mat)
+            const int2 roi_in, const float2 roi_out, const float scale_in, const float scale_out,
+            const int flip, const float2 t, const float2 k, const float4 mat,
+            const float4 k_space, const float2 ka, const float4 ma, const float2 mb)
 {
   const int x = get_global_id(0);
   const int y = get_global_id(1);
@@ -407,9 +397,9 @@ clip_rotate_bilinear(read_only image2d_t in, write_only image2d_t out, const int
 
   float2 pi, po;
   
-  pi.x = roi_out.x + scale_out * ci.x + x + 0.5f;
-  pi.y = roi_out.y + scale_out * ci.y + y + 0.5f;
-
+  pi.x = roi_out.x + x ;
+  pi.y = roi_out.y + y ;
+  
   pi.x -= flip ? t.y * scale_out : t.x * scale_out;
   pi.y -= flip ? t.x * scale_out : t.y * scale_out;
 
@@ -419,6 +409,8 @@ clip_rotate_bilinear(read_only image2d_t in, write_only image2d_t out, const int
 
   po.x += t.x * scale_in;
   po.y += t.y * scale_in;
+
+  if (k_space.z > 0.0f) keystone_backtransform(&po,k_space,ka,ma,mb);
 
   po.x -= roi_in.x;
   po.y -= roi_in.y;
@@ -442,21 +434,22 @@ clip_rotate_bilinear(read_only image2d_t in, write_only image2d_t out, const int
 __kernel void
 clip_rotate_bicubic(read_only image2d_t in, write_only image2d_t out, const int width, const int height, 
             const int in_width, const int in_height,
-            const int2 roi_in, const int2 roi_out, const float scale_in, const float scale_out,
-            const int flip, const float2 ci, const float2 t, const float2 k, const float4 mat)
+            const int2 roi_in, const float2 roi_out, const float scale_in, const float scale_out,
+            const int flip, const float2 t, const float2 k, const float4 mat,
+            const float4 k_space, const float2 ka, const float4 ma, const float2 mb)
 {
   const int x = get_global_id(0);
   const int y = get_global_id(1);
 
   const int kwidth = 2;
-
+  
   if(x >= width || y >= height) return;
 
   float2 pi, po;
   
-  pi.x = roi_out.x + scale_out * ci.x + x + 0.5f;
-  pi.y = roi_out.y + scale_out * ci.y + y + 0.5f;
-
+  pi.x = roi_out.x + x ;
+  pi.y = roi_out.y + y ;
+  
   pi.x -= flip ? t.y * scale_out : t.x * scale_out;
   pi.y -= flip ? t.x * scale_out : t.y * scale_out;
 
@@ -466,6 +459,8 @@ clip_rotate_bicubic(read_only image2d_t in, write_only image2d_t out, const int 
 
   po.x += t.x * scale_in;
   po.y += t.y * scale_in;
+
+  if (k_space.z > 0.0f) keystone_backtransform(&po,k_space,ka,ma,mb);
 
   po.x -= roi_in.x;
   po.y -= roi_in.y;
@@ -487,7 +482,9 @@ clip_rotate_bicubic(read_only image2d_t in, write_only image2d_t out, const int 
     weight += w;
   }
 
-  write_imagef (out, (int2)(x, y), pixel / weight);
+  pixel = (tx >= 0 && ty >= 0 && tx < in_width && ty < in_height) ? pixel / weight : (float4)0.0f;
+
+  write_imagef (out, (int2)(x, y), pixel);
 }
 
 
@@ -495,21 +492,22 @@ clip_rotate_bicubic(read_only image2d_t in, write_only image2d_t out, const int 
 __kernel void
 clip_rotate_lanczos2(read_only image2d_t in, write_only image2d_t out, const int width, const int height, 
             const int in_width, const int in_height,
-            const int2 roi_in, const int2 roi_out, const float scale_in, const float scale_out,
-            const int flip, const float2 ci, const float2 t, const float2 k, const float4 mat)
+            const int2 roi_in, const float2 roi_out, const float scale_in, const float scale_out,
+            const int flip, const float2 t, const float2 k, const float4 mat,
+            const float4 k_space, const float2 ka, const float4 ma, const float2 mb)
 {
   const int x = get_global_id(0);
   const int y = get_global_id(1);
 
   const int kwidth = 2;
-
+  
   if(x >= width || y >= height) return;
 
   float2 pi, po;
   
-  pi.x = roi_out.x + scale_out * ci.x + x + 0.5f;
-  pi.y = roi_out.y + scale_out * ci.y + y + 0.5f;
-
+  pi.x = roi_out.x + x ;
+  pi.y = roi_out.y + y ;
+  
   pi.x -= flip ? t.y * scale_out : t.x * scale_out;
   pi.y -= flip ? t.x * scale_out : t.y * scale_out;
 
@@ -519,6 +517,8 @@ clip_rotate_lanczos2(read_only image2d_t in, write_only image2d_t out, const int
 
   po.x += t.x * scale_in;
   po.y += t.y * scale_in;
+
+  if (k_space.z > 0.0f) keystone_backtransform(&po,k_space,ka,ma,mb);
 
   po.x -= roi_in.x;
   po.y -= roi_in.y;
@@ -540,7 +540,9 @@ clip_rotate_lanczos2(read_only image2d_t in, write_only image2d_t out, const int
     weight += w;
   }
 
-  write_imagef (out, (int2)(x, y), pixel / weight);
+  pixel = (tx >= 0 && ty >= 0 && tx < in_width && ty < in_height) ? pixel / weight : (float4)0.0f;
+
+  write_imagef (out, (int2)(x, y), pixel);
 }
 
 
@@ -549,21 +551,22 @@ clip_rotate_lanczos2(read_only image2d_t in, write_only image2d_t out, const int
 __kernel void
 clip_rotate_lanczos3(read_only image2d_t in, write_only image2d_t out, const int width, const int height, 
             const int in_width, const int in_height,
-            const int2 roi_in, const int2 roi_out, const float scale_in, const float scale_out,
-            const int flip, const float2 ci, const float2 t, const float2 k, const float4 mat)
+            const int2 roi_in, const float2 roi_out, const float scale_in, const float scale_out,
+            const int flip, const float2 t, const float2 k, const float4 mat,
+            const float4 k_space, const float2 ka, const float4 ma, const float2 mb)
 {
   const int x = get_global_id(0);
   const int y = get_global_id(1);
 
   const int kwidth = 3;
-
+  
   if(x >= width || y >= height) return;
 
   float2 pi, po;
   
-  pi.x = roi_out.x + scale_out * ci.x + x + 0.5f;
-  pi.y = roi_out.y + scale_out * ci.y + y + 0.5f;
-
+  pi.x = roi_out.x + x ;
+  pi.y = roi_out.y + y ;
+  
   pi.x -= flip ? t.y * scale_out : t.x * scale_out;
   pi.y -= flip ? t.x * scale_out : t.y * scale_out;
 
@@ -574,8 +577,10 @@ clip_rotate_lanczos3(read_only image2d_t in, write_only image2d_t out, const int
   po.x += t.x * scale_in;
   po.y += t.y * scale_in;
 
-  po.x -= roi_in.x;
-  po.y -= roi_in.y;
+  if (k_space.z > 0.0f) keystone_backtransform(&po,k_space,ka,ma,mb);
+
+  po.x -= roi_in.x ;
+  po.y -= roi_in.y ;
 
   int tx = po.x;
   int ty = po.y;
@@ -594,7 +599,9 @@ clip_rotate_lanczos3(read_only image2d_t in, write_only image2d_t out, const int
     weight += w;
   }
 
-  write_imagef (out, (int2)(x, y), pixel / weight);
+  pixel = (tx >= 0 && ty >= 0 && tx < in_width && ty < in_height) ? pixel / weight : (float4)0.0f;
+
+  write_imagef (out, (int2)(x, y), pixel);
 }
 
 
@@ -951,43 +958,77 @@ fast_expf(const float x)
 }
 
 
+float
+envelope(const float L)
+{
+  const float x = clamp(L/100.0f, 0.0f, 1.0f);
+  // const float alpha = 2.0f;
+  const float beta = 0.6f;
+  if(x < beta)
+  {
+    // return 1.0f-fabsf(x/beta-1.0f)^2
+    const float tmp = fabs(x/beta-1.0f);
+    return 1.0f-tmp*tmp;
+  }
+  else
+  {
+    const float tmp1 = (1.0f-x)/(1.0f-beta);
+    const float tmp2 = tmp1*tmp1;
+    const float tmp3 = tmp2*tmp1;
+    return 3.0f*tmp2 - 2.0f*tmp3;
+  }
+}
+
 /* kernel for monochrome */
-__kernel void
-monochrome(read_only image2d_t in, write_only image2d_t out, const int width, const int height, 
-           const float a, const float b, const float size)
+kernel void
+monochrome_filter(
+    read_only image2d_t in,
+    write_only image2d_t out,
+    const int width,
+    const int height, 
+    const float a,
+    const float b,
+    const float size)
 {
   const int x = get_global_id(0);
   const int y = get_global_id(1);
 
   if(x >= width || y >= height) return;
 
-  float4 pixel = read_imagef(in, sampleri, (int2)(x, y));
-  pixel.x *= fast_expf(-clamp(((pixel.y - a)*(pixel.y - a) + (pixel.z - b)*(pixel.z - b))/(2.0f * size), 0.0f, 1.0f));
+  float4 pixel = read_imagef (in,   sampleri, (int2)(x, y));
+  // TODO: this could be a native_expf, or exp2f, need to evaluate comparisons with cpu though:
+  pixel.x = 100.0f*fast_expf(-clamp(((pixel.y - a)*(pixel.y - a) + (pixel.z - b)*(pixel.z - b))/(2.0f * size), 0.0f, 1.0f));
+  write_imagef (out, (int2)(x, y), pixel);
+}
+
+kernel void
+monochrome(
+    read_only image2d_t in,
+    read_only image2d_t base,
+    write_only image2d_t out,
+    const int width,
+    const int height, 
+    const float a,
+    const float b,
+    const float size,
+    float highlights)
+{
+  const int x = get_global_id(0);
+  const int y = get_global_id(1);
+
+  if(x >= width || y >= height) return;
+
+  float4 pixel = read_imagef (in,   sampleri, (int2)(x, y));
+  float4 basep = read_imagef (base, sampleri, (int2)(x, y));
+  float filter  = fast_expf(-clamp(((pixel.y - a)*(pixel.y - a) + (pixel.z - b)*(pixel.z - b))/(2.0f * size), 0.0f, 1.0f));
+  float tt = envelope(pixel.x);
+  float t  = tt + (1.0f-tt)*(1.0f-highlights);
+  pixel.x = mix(pixel.x, pixel.x*basep.x/100.0f, t);
   pixel.y = pixel.z = 0.0f;
   write_imagef (out, (int2)(x, y), pixel);
 }
 
 
-float
-lab_f_inv(float x)
-{
-  const float epsilon = 0.206896551f; 
-  const float kappa   = 24389.0f/27.0f;
-  if(x > epsilon) return x*x*x;
-  else return (116.0f*x - 16.0f)/kappa;
-}
-
-void
-Lab_to_XYZ(float *Lab, float *XYZ)
-{
-  const float d50[3] = { 0.9642f, 1.0f, 0.8249f };
-  const float fy = (Lab[0] + 16.0f)/116.0f;
-  const float fx = Lab[1]/500.0f + fy;
-  const float fz = fy - Lab[2]/200.0f;
-  XYZ[0] = d50[0]*lab_f_inv(fx);
-  XYZ[1] = d50[1]*lab_f_inv(fy);
-  XYZ[2] = d50[2]*lab_f_inv(fz);
-}
 
 /* kernel for the plugin colorout, fast matrix + shaper path only */
 kernel void
@@ -1002,7 +1043,10 @@ colorout (read_only image2d_t in, write_only image2d_t out, const int width, con
 
   float4 pixel = read_imagef(in, sampleri, (int2)(x, y));
   float XYZ[3], rgb[3];
-  Lab_to_XYZ((float *)&pixel, XYZ);
+  float4 xyz = Lab_to_XYZ(pixel);
+  XYZ[0] = xyz.x;
+  XYZ[1] = xyz.y;
+  XYZ[2] = xyz.z;
   for(int i=0;i<3;i++)
   {
     rgb[i] = 0.0f;
@@ -1081,7 +1125,7 @@ colorzones (read_only image2d_t in, write_only image2d_t out, const int width, c
 
   const float a = pixel.y;
   const float b = pixel.z;
-  const float h = fmod(atan2(b, a) + 2.0f*M_PI, 2.0f*M_PI)/(2.0f*M_PI);
+  const float h = fmod(atan2(b, a) + 2.0f*M_PI_F, 2.0f*M_PI_F)/(2.0f*M_PI_F);
   const float C = sqrt(b*b + a*a);
 
   float select = 0.0f;
@@ -1110,8 +1154,8 @@ colorzones (read_only image2d_t in, write_only image2d_t out, const int width, c
   const float L = pixel.x * pow(2.0f, 4.0f*Lm);
 
   pixel.x = L;
-  pixel.y = cos(2.0f*M_PI*(h + hm)) * Cm * C;
-  pixel.z = sin(2.0f*M_PI*(h + hm)) * Cm * C;
+  pixel.y = cos(2.0f*M_PI_F*(h + hm)) * Cm * C;
+  pixel.z = sin(2.0f*M_PI_F*(h + hm)) * Cm * C;
 
   write_imagef (out, (int2)(x, y), pixel); 
 }
@@ -1193,13 +1237,12 @@ lowlight (read_only image2d_t in, write_only image2d_t out, const int width, con
   const float c = 0.5f;
   const float threshold = 0.01f;
 
-  float4 XYZ;
   float V;
   float w;
 
   float4 pixel = read_imagef(in, sampleri, (int2)(x, y));
 
-  Lab_to_XYZ((float*)&pixel, (float *)&XYZ);
+  float4 XYZ = Lab_to_XYZ(pixel);
 
   // calculate scotopic luminance
   if (XYZ.x > threshold)
@@ -1221,7 +1264,7 @@ lowlight (read_only image2d_t in, write_only image2d_t out, const int width, con
 
   XYZ = w * XYZ + (1.0f - w) * V * XYZ_sw;
 
-  XYZ_to_Lab((float *)&XYZ, (float *)&pixel);
+  pixel = XYZ_to_Lab(XYZ);
 
   write_imagef (out, (int2)(x, y), pixel);
 }

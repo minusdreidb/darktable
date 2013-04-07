@@ -1,0 +1,18 @@
+<sect2 status="final" id="recently used collections"><title>Recently used collections</title>
+	<informaltable frame="none"><tgroup cols="2" colsep="0" rowsep="0">
+			<colspec colwidth="6*"/>
+			<colspec colwidth="4*"/>
+			<tbody>
+				<row>						
+					<entry>This panel keeps tracks of the latest collections you have used, so you can jump within recently used collections without remembering what rules were
+                                        specified in the collection.
+					</entry>
+					<entry>
+						<graphic fileref="lighttable/images/panel_recent_collections.png" scalefit="1" width="80%" align="center" />
+					</entry>
+				</row>
+			</tbody>
+		</tgroup>
+	</informaltable>
+</sect2>
+		

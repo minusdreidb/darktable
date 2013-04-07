@@ -27,17 +27,24 @@
 #include "common/imageio.h"
 #include "common/imageio_module.h"
 #include "common/imageio_exr.h"
+#ifdef HAVE_OPENJPEG
+#include "common/imageio_j2k.h"
+#endif
 #include "common/imageio_jpeg.h"
+#include "common/imageio_png.h"
 #include "common/imageio_tiff.h"
 #include "common/imageio_pfm.h"
 #include "common/imageio_rgbe.h"
+#include "common/imageio_gm.h"
 #include "common/imageio_rawspeed.h"
 #include "common/image_compression.h"
 #include "common/mipmap_cache.h"
+#include "common/styles.h"
 #include "control/control.h"
 #include "control/conf.h"
 #include "develop/develop.h"
 #include "develop/imageop.h"
+#include "develop/blend.h"
 #include "iop/colorout.h"
 #include "libraw/libraw.h"
 
@@ -217,9 +224,9 @@ int dt_imageio_write_pos(int i, int j, int wd, int ht, float fwd, float fht, int
 
 dt_imageio_retval_t
 dt_imageio_open_hdr(
-    dt_image_t  *img,
-    const char  *filename,
-    dt_mipmap_cache_allocator_t a)
+  dt_image_t  *img,
+  const char  *filename,
+  dt_mipmap_cache_allocator_t a)
 {
   // needed to alloc correct buffer size:
   img->bpp = 4*sizeof(float);
@@ -244,9 +251,9 @@ return_label:
 // open a raw file, libraw path:
 dt_imageio_retval_t
 dt_imageio_open_raw(
-    dt_image_t  *img,
-    const char  *filename,
-    dt_mipmap_cache_allocator_t a)
+  dt_image_t  *img,
+  const char  *filename,
+  dt_mipmap_cache_allocator_t a)
 {
   if(!img->exif_inited)
     (void) dt_exif_read(img, filename);
@@ -287,7 +294,6 @@ dt_imageio_open_raw(
   ret = libraw_unpack(raw);
   // img->black   = raw->color.black/65535.0;
   // img->maximum = raw->color.maximum/65535.0;
-  img->bpp = sizeof(uint16_t);
   // printf("black, max: %d %d %f %f\n", raw->color.black, raw->color.maximum, img->black, img->maximum);
   HANDLE_ERRORS(ret, 1);
   ret = libraw_dcraw_process(raw);
@@ -301,6 +307,7 @@ dt_imageio_open_raw(
     img->orientation = raw->sizes.flip;
   // filters seem only ever to take a useful value after unpack/process
   img->filters = raw->idata.filters;
+  img->bpp = img->filters ? sizeof(uint16_t) : 4*sizeof(float);
   img->width  = (img->orientation & 4) ? raw->sizes.height : raw->sizes.width;
   img->height = (img->orientation & 4) ? raw->sizes.width  : raw->sizes.height;
   img->exif_iso = raw->other.iso_speed;
@@ -321,11 +328,14 @@ dt_imageio_open_raw(
     free(image);
     return DT_IMAGEIO_CACHE_FULL;
   }
+  if(img->filters)
+  {
 #ifdef _OPENMP
   #pragma omp parallel for schedule(static) default(none) shared(img, image, raw, buf)
 #endif
-  for(int k=0; k<img->width*img->height; k++)
-    ((uint16_t *)buf)[k] = CLAMPS((((uint16_t *)image->data)[k] - raw->color.black)*65535.0f/(float)(raw->color.maximum - raw->color.black), 0, 0xffff);
+    for(int k=0; k<img->width*img->height; k++)
+      ((uint16_t *)buf)[k] = CLAMPS((((uint16_t *)image->data)[k] - raw->color.black)*65535.0f/(float)(raw->color.maximum - raw->color.black), 0, 0xffff);
+  }
   // clean up raw stuff.
   libraw_recycle(raw);
   libraw_close(raw);
@@ -333,48 +343,75 @@ dt_imageio_open_raw(
   raw = NULL;
   image = NULL;
 
-  img->flags &= ~DT_IMAGE_LDR;
-  img->flags &= ~DT_IMAGE_HDR;
-  img->flags |= DT_IMAGE_RAW;
+  if(img->filters)
+  {
+    img->flags &= ~DT_IMAGE_LDR;
+    img->flags &= ~DT_IMAGE_HDR;
+    img->flags |= DT_IMAGE_RAW;
+  }
+  else
+  {
+    // ldr dng. it exists :(
+    img->flags &= ~DT_IMAGE_RAW;
+    img->flags &= ~DT_IMAGE_HDR;
+    img->flags |= DT_IMAGE_LDR;
+  }
   return DT_IMAGEIO_OK;
 }
 
-/* magic data: offset,length, xx, yy, ... 
+/* magic data: exclusion,offset,length, xx, yy, ...
     just add magic bytes to match to this struct
     to extend mathc on ldr formats.
 */
-static const uint8_t _imageio_ldr_magic[] =  {
-    /* jpeg magics */
-    0x00, 0x02, 0xff, 0xd8,                         // SOI marker
-  
-    /* png image */
-    0x01, 0x03, 0x50, 0x4E, 0x47,                   // ASCII 'PNG'
+static const uint8_t _imageio_ldr_magic[] =
+{
+  /* jpeg magics */
+  0x00, 0x00, 0x02, 0xff, 0xd8,                         // SOI marker
 
-    /* tiff image, intel */
-    // 0x00, 0x04, 0x4d, 0x4d, 0x00, 0x2a,          // unfortunately fails because raw is similar
+#ifdef HAVE_OPENJPEG
+  /* jpeg 2000, jp2 format */
+  0x00, 0x00, 0x0c, 0x0, 0x0, 0x0, 0x0C, 0x6A, 0x50, 0x20, 0x20, 0x0D, 0x0A, 0x87, 0x0A,
 
-    /* tiff image, motorola */
-    // 0x00, 0x04, 0x49, 0x49, 0x2a, 0x00
+  /* jpeg 2000, j2k format */
+  0x00, 0x00, 0x05, 0xFF, 0x4F, 0xFF, 0x51, 0x00,
+#endif
+
+  /* png image */
+  0x00, 0x01, 0x03, 0x50, 0x4E, 0x47,                   // ASCII 'PNG'
+
+  /* canon CR2 */
+  0x01, 0x00, 0x0a, 0x49, 0x49, 0x2a, 0x00, 0x10, 0x00, 0x00, 0x00, 0x43, 0x52,  // Canon CR2 is like TIFF with aditional magic number. must come before tiff as an exclusion
+
+  /* tiff image, intel */
+  0x00, 0x00, 0x04, 0x4d, 0x4d, 0x00, 0x2a,
+
+  /* tiff image, motorola */
+  0x00, 0x00, 0x04, 0x49, 0x49, 0x2a, 0x00
 };
 
 gboolean dt_imageio_is_ldr(const char *filename)
 {
   int offset=0;
-  uint8_t block[16]={0};
+  uint8_t block[16]= {0};
   FILE *fin = fopen(filename,"rb");
   if (fin)
   {
     /* read block from file */
     int s = fread(block,16,1,fin);
     fclose(fin);
-    
+
     /* compare magic's */
     while (s)
     {
-      if (memcmp(_imageio_ldr_magic+offset+2, block + _imageio_ldr_magic[offset], _imageio_ldr_magic[offset+1]) == 0)
+      if (memcmp(_imageio_ldr_magic+offset+3, block + _imageio_ldr_magic[offset+1], _imageio_ldr_magic[offset+2]) == 0)
+      {
+        if(_imageio_ldr_magic[offset] == 0x01)
+          return FALSE;
+        else
           return TRUE;
-      offset += 2 + (_imageio_ldr_magic+offset)[1];
-      
+      }
+      offset += 3 + (_imageio_ldr_magic+offset)[2];
+
       /* check if finished */
       if(offset >= sizeof(_imageio_ldr_magic))
         break;
@@ -386,9 +423,9 @@ gboolean dt_imageio_is_ldr(const char *filename)
 // transparent read method to load ldr image to dt_raw_image_t with exif and so on.
 dt_imageio_retval_t
 dt_imageio_open_ldr(
-    dt_image_t *img,
-    const char *filename,
-    dt_mipmap_cache_allocator_t a)
+  dt_image_t *img,
+  const char *filename,
+  dt_mipmap_cache_allocator_t a)
 {
   dt_imageio_retval_t ret;
   ret = dt_imageio_open_tiff(img, filename, a);
@@ -401,40 +438,39 @@ dt_imageio_open_ldr(
     return ret;
   }
 
-  // jpeg stuff here:
-  if(!img->exif_inited)
-    (void) dt_exif_read(img, filename);
-  const int orientation = dt_image_orientation(img);
-
-  dt_imageio_jpeg_t jpg;
-  if(dt_imageio_jpeg_read_header(filename, &jpg)) return DT_IMAGEIO_FILE_CORRUPTED;
-  img->width  = (orientation & 4) ? jpg.height : jpg.width;
-  img->height = (orientation & 4) ? jpg.width  : jpg.height;
-
-  uint8_t *tmp = (uint8_t *)malloc(sizeof(uint8_t)*jpg.width*jpg.height*4);
-  if(dt_imageio_jpeg_read(&jpg, tmp))
+  ret = dt_imageio_open_png(img, filename, a);
+  if(ret == DT_IMAGEIO_OK || ret == DT_IMAGEIO_CACHE_FULL)
   {
-    free(tmp);
-    return DT_IMAGEIO_FILE_CORRUPTED;
+    img->filters = 0;
+    img->flags &= ~DT_IMAGE_RAW;
+    img->flags &= ~DT_IMAGE_HDR;
+    img->flags |= DT_IMAGE_LDR;
+    return ret;
   }
 
-  img->bpp = 4*sizeof(float);
-  void *buf = dt_mipmap_cache_alloc(img, DT_MIPMAP_FULL, a);
-  if(!buf)
+#ifdef HAVE_OPENJPEG
+  ret = dt_imageio_open_j2k(img, filename, a);
+  if(ret == DT_IMAGEIO_OK || ret == DT_IMAGEIO_CACHE_FULL)
   {
-    free(tmp);
-    return DT_IMAGEIO_CACHE_FULL;
+    img->filters = 0;
+    img->flags &= ~DT_IMAGE_RAW;
+    img->flags &= ~DT_IMAGE_HDR;
+    img->flags |= DT_IMAGE_LDR;
+    return ret;
+  }
+#endif
+
+  ret = dt_imageio_open_jpeg(img, filename, a);
+  if(ret == DT_IMAGEIO_OK || ret == DT_IMAGEIO_CACHE_FULL)
+  {
+    img->filters = 0;
+    img->flags &= ~DT_IMAGE_RAW;
+    img->flags &= ~DT_IMAGE_HDR;
+    img->flags |= DT_IMAGE_LDR;
+    return ret;
   }
 
-  dt_imageio_flip_buffers_ui8_to_float((float *)buf, tmp, 0.0f, 255.0f, 4, jpg.width, jpg.height, jpg.width, jpg.height, 4*jpg.width, orientation);
-
-  free(tmp);
-
-  img->filters = 0;
-  img->flags &= ~DT_IMAGE_RAW;
-  img->flags &= ~DT_IMAGE_HDR;
-  img->flags |= DT_IMAGE_LDR;
-  return DT_IMAGEIO_OK;
+  return DT_IMAGEIO_FILE_CORRUPTED;
 }
 
 void dt_imageio_to_fractional(float in, uint32_t *num, uint32_t *den)
@@ -454,34 +490,39 @@ void dt_imageio_to_fractional(float in, uint32_t *num, uint32_t *den)
 }
 
 int dt_imageio_export(
-    const uint32_t              imgid,
-    const char                 *filename,
-    dt_imageio_module_format_t *format,
-    dt_imageio_module_data_t   *format_params)
+  const uint32_t              imgid,
+  const char                 *filename,
+  dt_imageio_module_format_t *format,
+  dt_imageio_module_data_t   *format_params,
+  const gboolean              high_quality)
 {
   if (strcmp(format->mime(format_params),"x-copy")==0)
     /* This is a just a copy, skip process and just export */
-    return format->write_image(format_params, filename, NULL, NULL, 0, imgid);    
+    return format->write_image(format_params, filename, NULL, NULL, 0, imgid);
   else
     return dt_imageio_export_with_flags(imgid, filename, format, format_params,
-					0, 0, dt_conf_get_bool("plugins/lighttable/export/high_quality_processing"), 0);
+                                        0, 0, high_quality, 0, NULL);
 }
 
 // internal function: to avoid exif blob reading + 8-bit byteorder flag + high-quality override
 int dt_imageio_export_with_flags(
-    const uint32_t              imgid,
-    const char                 *filename,
-    dt_imageio_module_format_t *format,
-    dt_imageio_module_data_t   *format_params,
-    const int32_t               ignore_exif,
-    const int32_t               display_byteorder,
-    const int32_t               high_quality,
-    const int32_t               thumbnail_export)
+  const uint32_t              imgid,
+  const char                 *filename,
+  dt_imageio_module_format_t *format,
+  dt_imageio_module_data_t   *format_params,
+  const int32_t               ignore_exif,
+  const int32_t               display_byteorder,
+  const gboolean              high_quality,
+  const int32_t               thumbnail_export,
+  const char                 *filter)
 {
   dt_develop_t dev;
   dt_dev_init(&dev, 0);
   dt_mipmap_buffer_t buf;
-  dt_mipmap_cache_read_get(darktable.mipmap_cache, &buf, imgid, DT_MIPMAP_FULL, DT_MIPMAP_BLOCKING);
+  if(thumbnail_export && dt_conf_get_bool("plugins/lighttable/low_quality_thumbnails"))
+    dt_mipmap_cache_read_get(darktable.mipmap_cache, &buf, imgid, DT_MIPMAP_F, DT_MIPMAP_BLOCKING);
+  else
+    dt_mipmap_cache_read_get(darktable.mipmap_cache, &buf, imgid, DT_MIPMAP_FULL, DT_MIPMAP_BLOCKING);
   dt_dev_load_image(&dev, imgid);
   const dt_image_t *img = &dev.image_storage;
   const int wd = img->width;
@@ -492,27 +533,83 @@ int dt_imageio_export_with_flags(
   dt_times_t start;
   dt_get_times(&start);
   dt_dev_pixelpipe_t pipe;
-  res = thumbnail_export ? dt_dev_pixelpipe_init_thumbnail(&pipe, wd, ht) : dt_dev_pixelpipe_init_export(&pipe, wd, ht);
+  res = thumbnail_export ? dt_dev_pixelpipe_init_thumbnail(&pipe, wd, ht) : dt_dev_pixelpipe_init_export(&pipe, wd, ht, format->levels(format_params));
   if(!res)
   {
     dt_control_log(_("failed to allocate memory for export, please lower the threads used for export or buy more memory."));
     dt_dev_cleanup(&dev);
-    if(buf.buf)
-      dt_mipmap_cache_read_release(darktable.mipmap_cache, &buf);
+    dt_mipmap_cache_read_release(darktable.mipmap_cache, &buf);
     return 1;
   }
 
   if(!buf.buf)
   {
     dt_control_log(_("image `%s' is not available!"), img->filename);
+    dt_mipmap_cache_read_release(darktable.mipmap_cache, &buf);
     dt_dev_cleanup(&dev);
     return 1;
+  }
+
+  //  If a style is to be applied during export, add the iop params into the history
+  if (!thumbnail_export && strlen(format_params->style) && strcmp(format_params->style,_("none")))
+  {
+    GList *stls;
+
+    GList *modules = dev.iop;
+    dt_iop_module_t *m = NULL;
+
+    if ((stls=dt_styles_get_item_list(format_params->style, TRUE, -1)) == 0)
+    {
+      dt_control_log(_("cannot find the style '%s' to apply during export."), format_params->style);
+      dt_dev_cleanup(&dev);
+      dt_mipmap_cache_read_release(darktable.mipmap_cache, &buf);
+      return 1;
+    }
+
+    //  Add each params
+    while (stls)
+    {
+      dt_style_item_t *s = (dt_style_item_t *) stls->data;
+
+      modules = dev.iop;
+      while (modules)
+      {
+        m = (dt_iop_module_t *)modules->data;
+
+        if (strcmp(m->op, s->name) == 0)
+        {
+          dt_dev_history_item_t *h = malloc(sizeof(dt_dev_history_item_t));
+
+          h->params = s->params;
+          h->enabled = 1;
+          h->module = m;
+          h->multi_priority = 1;
+          strcpy(h->multi_name, "");
+
+          h->blend_params = malloc(sizeof(dt_develop_blend_params_t));
+          memset(h->blend_params, 0, sizeof(dt_develop_blend_params_t));
+
+          dev.history_end++;
+          dev.history = g_list_append(dev.history, h);
+          break;
+        }
+        modules = g_list_next(modules);
+      }
+      stls = g_list_next(stls);
+    }
   }
 
   dt_dev_pixelpipe_set_input(&pipe, &dev, (float *)buf.buf, buf.width, buf.height, 1.0);
   dt_dev_pixelpipe_create_nodes(&pipe, &dev);
   dt_dev_pixelpipe_synch_all(&pipe, &dev);
   dt_dev_pixelpipe_get_dimensions(&pipe, &dev, pipe.iwidth, pipe.iheight, &pipe.processed_width, &pipe.processed_height);
+  if(filter)
+  {
+    if(!strncmp(filter, "pre:", 4))
+      dt_dev_pixelpipe_disable_after(&pipe, filter+4);
+    if(!strncmp(filter, "post:", 5))
+      dt_dev_pixelpipe_disable_before(&pipe, filter+5);
+  }
   dt_show_times(&start, "[export] creating pixelpipe", NULL);
 
   // find output color profile for this image:
@@ -545,27 +642,28 @@ int dt_imageio_export_with_flags(
   g_free(overprofile);
 
   // get only once at the beginning, in case the user changes it on the way:
-  const int high_quality_processing = ((format_params->max_width  == 0 || format_params->max_width  >= pipe.processed_width ) &&
-                                       (format_params->max_height == 0 || format_params->max_height >= pipe.processed_height)) ? 0 :
-                                        high_quality;
+  const gboolean high_quality_processing = ((format_params->max_width  == 0 || format_params->max_width  >= pipe.processed_width ) &&
+                                       (format_params->max_height == 0 || format_params->max_height >= pipe.processed_height)) ? FALSE :
+                                      high_quality;
   const int width  = high_quality_processing ? 0 : format_params->max_width;
   const int height = high_quality_processing ? 0 : format_params->max_height;
-  const float scalex = width  > 0 ? fminf(width /(float)pipe.processed_width,  1.0) : 1.0;
-  const float scaley = height > 0 ? fminf(height/(float)pipe.processed_height, 1.0) : 1.0;
-  const float scale = fminf(scalex, scaley);
-  int processed_width  = scale*pipe.processed_width;
-  int processed_height = scale*pipe.processed_height;
+  const double scalex = width  > 0 ? fminf(width /(double)pipe.processed_width,  1.0) : 1.0;
+  const double scaley = height > 0 ? fminf(height/(double)pipe.processed_height, 1.0) : 1.0;
+  const double scale = fminf(scalex, scaley);
+  int processed_width  = scale*pipe.processed_width  + .5f;
+  int processed_height = scale*pipe.processed_height + .5f;
   const int bpp = format->bpp(format_params);
 
   // downsampling done last, if high quality processing was requested:
   uint8_t *outbuf = pipe.backbuf;
   uint8_t *moutbuf = NULL; // keep track of alloc'ed memory
+  dt_get_times(&start);
   if(high_quality_processing)
   {
     dt_dev_pixelpipe_process_no_gamma(&pipe, &dev, 0, 0, processed_width, processed_height, scale);
-    const float scalex = format_params->max_width  > 0 ? fminf(format_params->max_width /(float)pipe.processed_width,  1.0) : 1.0;
-    const float scaley = format_params->max_height > 0 ? fminf(format_params->max_height/(float)pipe.processed_height, 1.0) : 1.0;
-    const float scale = fminf(scalex, scaley);
+    const double scalex = format_params->max_width  > 0 ? fminf(format_params->max_width /(double)pipe.processed_width,  1.0) : 1.0;
+    const double scaley = format_params->max_height > 0 ? fminf(format_params->max_height/(double)pipe.processed_height, 1.0) : 1.0;
+    const double scale = fminf(scalex, scaley);
     processed_width  = scale*pipe.processed_width  + .5f;
     processed_height = scale*pipe.processed_height + .5f;
     moutbuf = (uint8_t *)dt_alloc_align(64, sizeof(float)*processed_width*processed_height*4);
@@ -590,6 +688,7 @@ int dt_imageio_export_with_flags(
       dt_dev_pixelpipe_process_no_gamma(&pipe, &dev, 0, 0, processed_width, processed_height, scale);
     outbuf = pipe.backbuf;
   }
+  dt_show_times(&start, thumbnail_export ? "[dev_process_thumbnail] pixel pipeline processing" : "[dev_process_export] pixel pipeline processing", NULL);
 
   // downconversion to low-precision formats:
   if(bpp == 8 && !display_byteorder)
@@ -600,7 +699,7 @@ int dt_imageio_export_with_flags(
       const float *const inbuf = (float *)outbuf;
       for(int k=0; k<processed_width*processed_height; k++)
       {
-        // convert in place, this is unfortunately very serial.. 
+        // convert in place, this is unfortunately very serial..
         const uint8_t r = CLAMP(inbuf[4*k+0]*0xff, 0, 0xff);
         const uint8_t g = CLAMP(inbuf[4*k+1]*0xff, 0, 0xff);
         const uint8_t b = CLAMP(inbuf[4*k+2]*0xff, 0, 0xff);
@@ -613,7 +712,7 @@ int dt_imageio_export_with_flags(
     {
       uint8_t *const buf8 = pipe.backbuf;
 #ifdef _OPENMP
-  #pragma omp parallel for default(none) shared(processed_width, processed_height) schedule(static)
+      #pragma omp parallel for default(none) shared(processed_width, processed_height) schedule(static)
 #endif
       // just flip byte order
       for(int k=0; k<processed_width*processed_height; k++)
@@ -630,11 +729,11 @@ int dt_imageio_export_with_flags(
     float    *buff  = (float *)   outbuf;
     uint16_t *buf16 = (uint16_t *)outbuf;
     for(int y=0; y<processed_height; y++) for(int x=0; x<processed_width ; x++)
-    {
-      // convert in place
-      const int k = x + processed_width*y;
-      for(int i=0; i<3; i++) buf16[4*k+i] = CLAMP(buff[4*k+i]*0x10000, 0, 0xffff);
-    }
+      {
+        // convert in place
+        const int k = x + processed_width*y;
+        for(int i=0; i<3; i++) buf16[4*k+i] = CLAMP(buff[4*k+i]*0x10000, 0, 0xffff);
+      }
   }
   // else output float, no further harm done to the pixels :)
 
@@ -647,7 +746,8 @@ int dt_imageio_export_with_flags(
     uint8_t exif_profile[65535]; // C++ alloc'ed buffer is uncool, so we waste some bits here.
     char pathname[1024];
     dt_image_full_path(imgid, pathname, 1024);
-    length = dt_exif_read_blob(exif_profile, pathname, sRGB, imgid);
+    // last param is dng mode, it's false here
+    length = dt_exif_read_blob(exif_profile, pathname, imgid, sRGB, processed_width, processed_height, 0);
 
     res = format->write_image (format_params, filename, outbuf, exif_profile, length, imgid);
   }
@@ -677,37 +777,46 @@ has_ldr_extension(const char *filename)
   for(; *cc!='.'&&cc>filename; cc--);
   gchar *ext = g_ascii_strdown(cc+1, -1);
   if(!strcmp(ext, "jpg") || !strcmp(ext, "jpeg") ||
-     !strcmp(ext, "tif") || !strcmp(ext, "tiff"))
-     ret = 1;
+      !strcmp(ext, "tif") || !strcmp(ext, "tiff"))
+    ret = 1;
   g_free(ext);
   return ret;
 }
 
 dt_imageio_retval_t
 dt_imageio_open(
-    dt_image_t  *img,               // non-const * means you hold a write lock!
-    const char  *filename,          // full path
-    dt_mipmap_cache_allocator_t a)  // allocate via dt_mipmap_cache_alloc
+  dt_image_t  *img,               // non-const * means you hold a write lock!
+  const char  *filename,          // full path
+  dt_mipmap_cache_allocator_t a)  // allocate via dt_mipmap_cache_alloc
 {
   /* first of all, check if file exists, dont bother to test loading if not exists */
   if(!g_file_test(filename, G_FILE_TEST_IS_REGULAR))
     return !DT_IMAGEIO_OK;
-  
+
   dt_imageio_retval_t ret = DT_IMAGEIO_FILE_CORRUPTED;
-  
+
   /* check if file is ldr using magic's */
   if (dt_imageio_is_ldr(filename))
     ret = dt_imageio_open_ldr(img, filename, a);
-  if(ret != DT_IMAGEIO_OK && ret != DT_IMAGEIO_CACHE_FULL)
+
 #ifdef HAVE_RAWSPEED
-    ret = dt_imageio_open_rawspeed(img, filename, a);
   if(ret != DT_IMAGEIO_OK && ret != DT_IMAGEIO_CACHE_FULL)
+    ret = dt_imageio_open_rawspeed(img, filename, a);
 #endif
+
+  if(ret != DT_IMAGEIO_OK && ret != DT_IMAGEIO_CACHE_FULL)
     ret = dt_imageio_open_raw(img, filename, a);
+
   if(ret != DT_IMAGEIO_OK && ret != DT_IMAGEIO_CACHE_FULL)
     ret = dt_imageio_open_hdr(img, filename, a);
-  if(ret != DT_IMAGEIO_OK && ret != DT_IMAGEIO_CACHE_FULL)      // failsafing, if ldr magic test fails..
+
+#ifdef HAVE_GRAPHICSMAGICK
+  if(ret != DT_IMAGEIO_OK && ret != DT_IMAGEIO_CACHE_FULL)
+    ret = dt_imageio_open_gm(img, filename, a);
+#else
+  if(ret != DT_IMAGEIO_OK && ret != DT_IMAGEIO_CACHE_FULL)
     ret = dt_imageio_open_ldr(img, filename, a);
+#endif
 
   img->flags &= ~DT_IMAGE_THUMBNAIL;
 

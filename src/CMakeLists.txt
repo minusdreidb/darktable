@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 2.6)
 
+cmake_policy(SET CMP0011 NEW)
+
 include(CheckCCompilerFlag)
 
 #
@@ -14,32 +16,37 @@ FILE(GLOB SOURCE_FILES
   "common/curve_tools.c"
   "common/darktable.c"
   "common/database.c"
+  "common/dbus.c"
   "common/exif.cc"
   "common/film.c"
   "common/file_location.c"
   "common/fswatch.c"
+  "common/gaussian.c"
   "common/grouping.c"
   "common/history.c"
+  "common/gpx.c"
   "common/image.c"
   "common/image_cache.c"
   "common/image_compression.c"
   "common/imageio.c"
   "common/imageio_exr.cc"
   "common/imageio_jpeg.c"
+  "common/imageio_png.c"
   "common/imageio_module.c"
   "common/imageio_pfm.c"
   "common/imageio_rgbe.c"
   "common/imageio_tiff.c"
+  "common/imageio_gm.c"
   "common/imageio_rawspeed.cc"
   "common/interpolation.c"
   "common/metadata.c"
   "common/mipmap_cache.c"
   "common/styles.c"
-  "common/similarity.c"
   "common/selection.c"
   "common/tags.c"
   "common/utility.c"
   "common/variables.c"
+  "common/pwstorage/backend_kwallet.c"
   "common/pwstorage/pwstorage.c"
   "common/opencl.c"
   "common/dynload.c"
@@ -53,6 +60,7 @@ FILE(GLOB SOURCE_FILES
   "control/signal.c"
   "develop/develop.c"
   "develop/imageop.c"
+  "develop/lightroom.c"
   "develop/pixelpipe.c"
   "develop/blend.c"
   "develop/blend_gui.c"
@@ -68,13 +76,16 @@ FILE(GLOB SOURCE_FILES
   "dtgtk/resetlabel.c"
   "gui/accelerators.c"
   "gui/contrast.c"
+  "gui/gtkentry.c"
   "gui/guides.c"
   "gui/gtk.c"
+  "gui/hist_dialog.c"
   "gui/preferences.c"
   "gui/presets.c"
   "gui/styles_dialog.c"
   "libs/lib.c"
   "views/view.c"
+  "views/undo.c"
   )
 FILE(GLOB HEADER_FILES "*.h" "common/*.h" "external/CL/*.h" "control/*.h" "iop/*.h" "libs/*.h", "views/*.h")
 
@@ -105,6 +116,11 @@ endif()
 #
 # Find all other required libraries for building
 #
+find_package(Glib 2.28 REQUIRED)
+include_directories(${Glib_INCLUDE_DIRS})
+list(APPEND LIBS ${Glib_LIBRARIES})
+add_definitions(${Glib_DEFINITIONS})
+
 find_package(GTK2 2.6 REQUIRED gtk)
 include_directories(${GTK2_INCLUDE_DIRS})
 list(APPEND LIBS ${GTK2_LIBRARIES})
@@ -161,19 +177,33 @@ if(USE_FLICKR)
   endif(FLICKCURL_FOUND)
 endif(USE_FLICKR)
 
+if(USE_GLIBJSON)
+  find_package(JsonGlib)
+  if(JsonGlib_FOUND)
+    include_directories(${JsonGlib_INCLUDE_DIRS})
+    list(APPEND LIBS ${JsonGlib_LIBRARIES})
+  endif(JsonGlib_FOUND)
+endif(USE_GLIBJSON)
+
+if(USE_OPENJPEG)
+  find_package(OpenJPEG)
+  if(OPENJPEG_FOUND)
+    list(APPEND SOURCES "common/imageio_j2k.c")
+    include_directories(${OPENJPEG_INCLUDE_DIRS})
+    list(APPEND LIBS ${OPENJPEG_LIBRARIES})
+    add_definitions(${OPENJPEG_DEFINITIONS})
+    add_definitions("-DHAVE_OPENJPEG")
+    if(OPENJPEG_VERSION VERSION_LESS "1.5.0")
+      message(STATUS "OpenJPEG version ${OPENJPEG_VERSION} found. Only 1.5 and newer support reading of icc profiles.")
+    else()
+      add_definitions("-DHAVE_OPENJPEG_ICC")
+    endif()
+  endif(OPENJPEG_FOUND)
+endif(USE_OPENJPEG)
+
 #
 # Detect compile of optional pwstorage backends
 #
-if(USE_KWALLET) 
-find_package(DBUSGLIB)
-  if(DBUSGLIB_FOUND)
-    list(APPEND SOURCES "common/pwstorage/backend_kwallet.c")
-    include_directories(${DBUSGLIB_INCLUDE_DIRS})
-    list(APPEND LIBS ${DBUSGLIB_LIBRARIES})
-    add_definitions("-DHAVE_KWALLET")
-  endif(DBUSGLIB_FOUND)
-endif(USE_KWALLET)
-
 if(USE_GNOME_KEYRING)
   find_package(GnomeKeyring)
   if(GNOMEKEYRING_FOUND)
@@ -184,11 +214,14 @@ if(USE_GNOME_KEYRING)
   endif(GNOMEKEYRING_FOUND)
 endif(USE_GNOME_KEYRING)
 
-# have a small test program, to be run as root on some systems to enable the driver to run cl stuff
-add_subdirectory(cltest)
-
-# have a command line interface
-add_subdirectory(cli)
+if(USE_MAC_INTEGRATION)
+  find_package(MacIntegration)
+  if(MACINTEGRATION_FOUND)
+    include_directories(${MacIntegration_INCLUDE_DIRS})
+    list(APPEND LIBS ${MacIntegration_LIBRARIES})
+    add_definitions("-DMAC_INTEGRATION")
+  endif(MACINTEGRATION_FOUND)
+endif(USE_MAC_INTEGRATION)
 
 if(USE_UNITY)
   find_package(Unity)
@@ -199,8 +232,18 @@ if(USE_UNITY)
   endif(UNITY_FOUND)
 endif(USE_UNITY)
 
+if(USE_GRAPHICSMAGICK)
+  find_package(GraphicsMagick)
+  if(GraphicsMagick_FOUND)
+    add_definitions(-DHAVE_GRAPHICSMAGICK)
+    include_directories(${GraphicsMagick_INCLUDE_DIRS})
+    list(APPEND LIBS ${GraphicsMagick_LIBRARIES})
+  endif(GraphicsMagick_FOUND)
+endif(USE_GRAPHICSMAGICK)
+
+
 # build opengl slideshow viewer?
-if(BUILD_SLIDESHOW) 
+if(BUILD_SLIDESHOW)
   find_package(SDL)
   find_package(OpenGL)
   if(SDL_FOUND AND OPENGL_FOUND)
@@ -240,6 +283,19 @@ endif(USE_OPENCL)
 if(GPHOTO2_FOUND)
   set(SOURCES ${SOURCES} "common/camera_control.c" "control/jobs/camera_jobs.c" "gui/camera_import_dialog.c" )
   add_definitions("-DHAVE_GPHOTO2")
+
+  # Gphoto 2.5 changed the prototype of a set of callback functions.
+  # The interface change makes it necessary to detect the version here,
+  # as it's not possible to do in code. Argh.
+  # Diff: http://sourceforge.net/p/gphoto/code/12735/
+  #
+  # This workaround may be removed when darktable no longer needs
+  # to support gphoto2 < 2.5.0.
+  #
+  if(${GPHOTO2_VERSION_STRING} VERSION_LESS "2.5")
+  else()
+    add_definitions("-DHAVE_GPHOTO_25_OR_NEWER")
+  endif()
 endif(GPHOTO2_FOUND)
 
 
@@ -250,21 +306,32 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -fno-strict-aliasing")
 # c++ code doesn't like -Werror (libraw)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -fno-strict-aliasing")
 
+if(NOT WIN32)
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pthread")
+endif(NOT WIN32)
+
+if(NOT CUSTOM_CFLAGS)
+
 if(NOT APPLE AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
   # apple build fails on deprecated warnings..
   # and too many warnings reported by Clang for now
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Werror")
-endif(NOT APPLE AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
 
-if(NOT WIN32)
-  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pthread")
-endif(NOT WIN32)
+  # gcc-4.8 build fails on unused local typedefs in gmacros.h:162
+  # to be removed when glib will get fixed
+  if (CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    execute_process(COMMAND ${CMAKE_C_COMPILER} -dumpversion OUTPUT_VARIABLE GCC_VERSION)
+    if (GCC_VERSION VERSION_GREATER 4.8 OR GCC_VERSION VERSION_EQUAL 4.8)
+      set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-unused-local-typedefs")
+    endif()
+  endif()
+endif(NOT APPLE AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
 
 if(NOT BINARY_PACKAGE_BUILD)
 	MESSAGE("-- Checking for -march=native support")
 	CHECK_C_COMPILER_FLAG("-march=native" MARCHNATIVE)
 	if (MARCHNATIVE)
-		set(MARCH "-march=native")	
+		set(MARCH "-march=native")
 	else()
 		MESSAGE("-- Checking for -mtune=native support")
 		CHECK_C_COMPILER_FLAG("-mtune=native" MTUNENATIVE)
@@ -279,17 +346,24 @@ else()
 endif()
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -msse2 -g")
-set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -ffast-math -fexpensive-optimizations ${MARCH}")
-set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -O0 -g -D_DEBUG")
+set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -ffast-math ${MARCH}")
+set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -O0 -g")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -msse2 -g")
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -ffast-math -fexpensive-optimizations ${MARCH}")
-set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0 -g -D_DEBUG")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -ffast-math ${MARCH}")
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0 -g")
 if(CMAKE_COMPILER_IS_GNUCC)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mfpmath=sse")
+set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -fexpensive-optimizations")
 endif()
 if(CMAKE_COMPILER_IS_GNUCXX)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mfpmath=sse")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -fexpensive-optimizations")
 endif()
+
+endif(NOT CUSTOM_CFLAGS)
+
+set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -D_DEBUG")
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -D_DEBUG")
 
 #
 # Generate config.h
@@ -303,16 +377,16 @@ include_directories("${CMAKE_CURRENT_BINARY_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
 #
 if(NOT ${Xsltproc_BIN} STREQUAL "Xsltproc_BIN-NOTFOUND")
 	add_custom_command(
-		DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../tools/generate_prefs.xsl ${CMAKE_CURRENT_SOURCE_DIR}/../data/darktableconfig.dtd ${CMAKE_CURRENT_SOURCE_DIR}/../data/darktableconfig.xml
+		DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../tools/generate_prefs.xsl ${CMAKE_CURRENT_SOURCE_DIR}/../data/darktableconfig.dtd ${CMAKE_CURRENT_BINARY_DIR}/../data/darktableconfig.xml
 		OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/preferences_gen.h
-		COMMAND ${Xsltproc_BIN} --stringparam HAVE_OPENCL ${HAVE_OPENCL} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/generate_prefs.xsl ${CMAKE_CURRENT_SOURCE_DIR}/../data/darktableconfig.xml > ${CMAKE_CURRENT_BINARY_DIR}/preferences_gen.h
+		COMMAND ${Xsltproc_BIN} --stringparam HAVE_OPENCL ${HAVE_OPENCL} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/generate_prefs.xsl ${CMAKE_CURRENT_BINARY_DIR}/../data/darktableconfig.xml > ${CMAKE_CURRENT_BINARY_DIR}/preferences_gen.h
 	)
 else(NOT ${Xsltproc_BIN} STREQUAL "Xsltproc_BIN-NOTFOUND")
 	if(NOT ${Saxon_BIN} STREQUAL "Saxon_BIN-NOTFOUND")
 		add_custom_command(
-			DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../tools/generate_prefs.xsl ${CMAKE_CURRENT_SOURCE_DIR}/../data/darktableconfig.dtd ${CMAKE_CURRENT_SOURCE_DIR}/../data/darktableconfig.xml
+			DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../tools/generate_prefs.xsl ${CMAKE_CURRENT_SOURCE_DIR}/../data/darktableconfig.dtd ${CMAKE_CURRENT_BINARY_DIR}/../data/darktableconfig.xml
 			OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/preferences_gen.h
-			COMMAND ${Saxon_BIN} ${CMAKE_CURRENT_SOURCE_DIR}/../data/darktableconfig.xml ${CMAKE_CURRENT_SOURCE_DIR}/../tools/generate_prefs.xsl HAVE_OPENCL=${HAVE_OPENCL} > ${CMAKE_CURRENT_BINARY_DIR}/preferences_gen.h
+			COMMAND ${Saxon_BIN} ${CMAKE_CURRENT_BINARY_DIR}/../data/darktableconfig.xml ${CMAKE_CURRENT_SOURCE_DIR}/../tools/generate_prefs.xsl HAVE_OPENCL=${HAVE_OPENCL} > ${CMAKE_CURRENT_BINARY_DIR}/preferences_gen.h
 		)
 	else(NOT ${Saxon_BIN} STREQUAL "Saxon_BIN-NOTFOUND")
 		message(FATAL_ERROR "Don't know how to generate preferences")
@@ -342,7 +416,6 @@ endif(APPLE)
 set_target_properties(lib_darktable PROPERTIES OUTPUT_NAME darktable)
 set_target_properties(lib_darktable PROPERTIES LINKER_LANGUAGE C)
 
-
 #
 # the libraw part is a bit of a hack:
 # the static linking didn't work since it was pulling -lstdc++ and -lm into linker flags.
@@ -358,7 +431,8 @@ else(APPLE)
   set(LIBRAW_STATIC_LIBS libraw_static)
 endif(APPLE)
 
-target_link_libraries(lib_darktable ${LIBS} ${LIBRAW_STATIC_LIBS})
+target_link_libraries(lib_darktable ${LIBRAW_STATIC_LIBS})
+list(APPEND STATIC_LIBS ${LIBRAW_STATIC_LIBS})
 
 # same for librawspeed (can switch it off with -DDONT_USE_RAWSPEED, for macs):
 if(NOT DONT_USE_RAWSPEED)
@@ -366,10 +440,56 @@ if(NOT DONT_USE_RAWSPEED)
   add_dependencies(lib_darktable rawspeed)
   add_library(rawspeed_static STATIC IMPORTED)
   set_target_properties(rawspeed_static PROPERTIES IMPORTED_LOCATION ${CMAKE_CURRENT_BINARY_DIR}/external/rawspeed/librawspeed.a)
-  target_link_libraries(lib_darktable ${LIBS} rawspeed_static)
+  target_link_libraries(lib_darktable rawspeed_static)
   # compile rawspeed
   add_subdirectory(external/rawspeed)
+  list(APPEND STATIC_LIBS rawspeed_static)
 endif(NOT DONT_USE_RAWSPEED)
+
+# osm gps map library
+if(USE_GEO)
+  find_package(LibSoup2)
+  if(LIBSOUP2_FOUND)
+    include_directories(${LIBSOUP2_INCLUDE_DIRS})
+    list(APPEND LIBS ${LIBSOUP2_LIBRARIES})
+    add_definitions(${LIBSOUP2_DEFINITIONS})
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/external/osm-gps-map/src)
+    add_dependencies(lib_darktable osmgpsmap)
+    add_library(osmgpsmap_static STATIC IMPORTED)
+    set_target_properties(osmgpsmap_static PROPERTIES IMPORTED_LOCATION ${CMAKE_CURRENT_BINARY_DIR}/external/osm-gps-map/libosmgpsmap.a)
+    target_link_libraries(lib_darktable osmgpsmap_static)
+    add_subdirectory(external/osm-gps-map)
+    list(APPEND STATIC_LIBS osmgpsmap_static)
+    add_definitions("-DHAVE_MAP")
+    message(STATUS "Map mode: enabled")
+  else(LIBSOUP2_FOUND)
+    set(USE_GEO OFF)
+    message(STATUS "Map mode: disabled, please install libsoup2")
+  endif(LIBSOUP2_FOUND)
+else(USE_GEO)
+  message(STATUS "Map mode: disabled")
+endif(USE_GEO)
+
+target_link_libraries(lib_darktable ${LIBS})
+
+# libcolord-gtk:
+if(USE_COLORD)
+  find_package(Colord)
+  if(COLORD_FOUND)
+    include_directories(${COLORD_INCLUDE_DIRS})
+    list(APPEND LIBS ${COLORD_LIBRARIES})
+    # we ship our own copy of libcolord-gtk - the one packaged in distros is linked against gtk3 :(
+    add_dependencies(lib_darktable colord-gtk)
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/external/colord-gtk/src)
+    add_library(colord-gtk_static STATIC IMPORTED)
+    set_target_properties(colord-gtk_static PROPERTIES IMPORTED_LOCATION ${CMAKE_CURRENT_BINARY_DIR}/external/colord-gtk/libcolord-gtk.a)
+    target_link_libraries(lib_darktable colord-gtk_static)
+    add_subdirectory(external/colord-gtk)
+    list(APPEND STATIC_LIBS colord-gtk_static)
+    add_dependencies(colord-gtk colord)
+    add_definitions("-DUSE_COLORDGTK")
+  endif(COLORD_FOUND)
+endif(USE_COLORD)
 
 # libsquish for compressed thumbnails:
 add_dependencies(lib_darktable squish)
@@ -378,21 +498,9 @@ set_target_properties(squish_static PROPERTIES IMPORTED_LOCATION ${CMAKE_CURRENT
 target_link_libraries(lib_darktable ${LIBS} squish_static)
 add_subdirectory(external/squish)
 
-# libcolord-gtk:
-find_package(ColordGtk)
-if(COLORDGTK_FOUND)
-  message(STATUS "Using colord to fetch color profiles")
-  #  include_directories(${COLORDGTK_INCLUDE_DIRS})
-  #  list(APPEND LIBS ${COLORDGTK_LIBRARIES})
-  #  add_definitions("-DUSE_COLORDGTK")
-#   add_dependencies(lib_darktable colord-gtk)
-else(COLORDGTK_FOUND)
-  message(STATUS "Either colord is missing or too old (<0.1.20)")
-endif(COLORDGTK_FOUND)
-
-
 install(TARGETS lib_darktable DESTINATION ${LIB_INSTALL}/darktable)
-list(APPEND LIBS lib_darktable)
+# make sure static libs is first
+list(INSERT LIBS 0 lib_darktable ${STATIC_LIBS})
 
 # Compile libraw modules
 add_subdirectory(external/LibRaw)
@@ -409,7 +517,11 @@ add_subdirectory(iop)
 # Compile export modules
 add_subdirectory(imageio)
 
+# have a small test program, to be run as root on some systems to enable the driver to run cl stuff
+add_subdirectory(cltest)
 
+# have a command line interface
+add_subdirectory(cli)
 
 
 #

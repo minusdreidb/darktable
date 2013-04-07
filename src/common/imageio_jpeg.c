@@ -21,6 +21,8 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
+#include "common/exif.h"
+#include "common/imageio.h"
 #include "common/colorspaces.h"
 #include "common/imageio_jpeg.h"
 #include <setjmp.h>
@@ -60,7 +62,7 @@ boolean dt_imageio_jpeg_fill_input_buffer(j_decompress_ptr cinfo)
 }
 void dt_imageio_jpeg_skip_input_data(j_decompress_ptr cinfo, long num_bytes)
 {
-  int i = cinfo->src->bytes_in_buffer - num_bytes;
+  ssize_t i = cinfo->src->bytes_in_buffer - num_bytes;
   if (i < 0) i = 0;
   cinfo->src->bytes_in_buffer = i;
   cinfo->src->next_input_byte += num_bytes;
@@ -116,7 +118,7 @@ int dt_imageio_jpeg_decompress(dt_imageio_jpeg_t *jpg, uint8_t *out)
       free(row_pointer[0]);
       return 1;
     }
-    for(int i=0; i<jpg->dinfo.image_width; i++) for(int k=0; k<3; k++)
+    for(unsigned int i=0; i<jpg->dinfo.image_width; i++) for(int k=0; k<3; k++)
         tmp[4*i+k] = row_pointer[0][3*i+k];
     tmp += 4*jpg->width;
   }
@@ -256,7 +258,6 @@ write_icc_profile (j_compress_ptr cinfo,
 }
 
 
-#if 0
 /*
  * Prepare for reading an ICC profile
  */
@@ -315,7 +316,7 @@ marker_is_icc (jpeg_saved_marker_ptr marker)
  */
 
 boolean
-read_icc_profile (j_decompress_ptr cinfo,
+read_icc_profile (j_decompress_ptr dinfo,
                   JOCTET **icc_data_ptr,
                   unsigned int *icc_data_len)
 {
@@ -339,7 +340,7 @@ read_icc_profile (j_decompress_ptr cinfo,
   for (seq_no = 1; seq_no <= MAX_SEQ_NO; seq_no++)
     marker_present[seq_no] = 0;
 
-  for (marker = cinfo->marker_list; marker != NULL; marker = marker->next)
+  for (marker = dinfo->marker_list; marker != NULL; marker = marker->next)
   {
     if (marker_is_icc(marker))
     {
@@ -373,7 +374,7 @@ read_icc_profile (j_decompress_ptr cinfo,
     total_length += data_length[seq_no];
   }
 
-  if (total_length <= 0)
+  if (total_length == 0)
     return FALSE;		/* found only empty markers? */
 
   /* Allocate space for assembled data */
@@ -382,7 +383,7 @@ read_icc_profile (j_decompress_ptr cinfo,
     return FALSE;		/* oops, out of memory */
 
   /* and fill it in */
-  for (marker = cinfo->marker_list; marker != NULL; marker = marker->next)
+  for (marker = dinfo->marker_list; marker != NULL; marker = marker->next)
   {
     if (marker_is_icc(marker))
     {
@@ -405,7 +406,6 @@ read_icc_profile (j_decompress_ptr cinfo,
 
   return TRUE;
 }
-#endif
 #undef ICC_MARKER
 #undef ICC_OVERHEAD_LEN
 #undef MAX_BYTES_IN_MARKER
@@ -494,6 +494,7 @@ int dt_imageio_jpeg_read_header(const char *filename, dt_imageio_jpeg_t *jpg)
   }
   jpeg_create_decompress(&(jpg->dinfo));
   jpeg_stdio_src(&(jpg->dinfo), jpg->f);
+  setup_read_icc_profile(&(jpg->dinfo));
   // jpg->dinfo.buffered_image = TRUE;
   jpeg_read_header(&(jpg->dinfo), TRUE);
   jpg->width  = jpg->dinfo.image_width;
@@ -525,10 +526,10 @@ int dt_imageio_jpeg_read(dt_imageio_jpeg_t *jpg, uint8_t *out)
       return 1;
     }
     if(jpg->dinfo.num_components < 3)
-      for(int i=0; i<jpg->dinfo.image_width; i++) for(int k=0; k<3; k++)
+      for(unsigned int i=0; i<jpg->dinfo.image_width; i++) for(int k=0; k<3; k++)
           tmp[4*i+k] = row_pointer[0][jpg->dinfo.num_components*i+0];
     else
-      for(int i=0; i<jpg->dinfo.image_width; i++) for(int k=0; k<3; k++)
+      for(unsigned int i=0; i<jpg->dinfo.image_width; i++) for(int k=0; k<3; k++)
           tmp[4*i+k] = row_pointer[0][3*i+k];
     tmp += 4*jpg->width;
   }
@@ -537,6 +538,55 @@ int dt_imageio_jpeg_read(dt_imageio_jpeg_t *jpg, uint8_t *out)
   free(row_pointer[0]);
   fclose(jpg->f);
   return 0;
+}
+
+int dt_imageio_jpeg_read_profile(dt_imageio_jpeg_t *jpg, uint8_t **out)
+{
+  unsigned int length = 0;
+  boolean res = read_icc_profile(&(jpg->dinfo), out, &length);
+  jpeg_destroy_decompress(&(jpg->dinfo));
+  fclose(jpg->f);
+  return res?length:0;
+}
+
+dt_imageio_retval_t dt_imageio_open_jpeg(dt_image_t *img,  const char *filename, dt_mipmap_cache_allocator_t a)
+{
+  const char *ext = filename + strlen(filename);
+  while(*ext != '.' && ext > filename) ext--;
+  if(strncmp(ext, ".jpg", 4) && strncmp(ext, ".JPG", 4) && strncmp(ext, ".jpeg", 5) && strncmp(ext, ".JPEG", 5))
+    return DT_IMAGEIO_FILE_CORRUPTED;
+
+  if(!img->exif_inited)
+    (void) dt_exif_read(img, filename);
+
+  const int orientation = dt_image_orientation(img);
+
+  dt_imageio_jpeg_t jpg;
+  if(dt_imageio_jpeg_read_header(filename, &jpg)) return DT_IMAGEIO_FILE_CORRUPTED;
+  img->width  = (orientation & 4) ? jpg.height : jpg.width;
+  img->height = (orientation & 4) ? jpg.width  : jpg.height;
+
+
+  uint8_t *tmp = (uint8_t *)malloc(sizeof(uint8_t)*jpg.width*jpg.height*4);
+  if(dt_imageio_jpeg_read(&jpg, tmp))
+  {
+    free(tmp);
+    return DT_IMAGEIO_FILE_CORRUPTED;
+  }
+
+  img->bpp = 4*sizeof(float);
+  void *buf = dt_mipmap_cache_alloc(img, DT_MIPMAP_FULL, a);
+  if(!buf)
+  {
+    free(tmp);
+    return DT_IMAGEIO_CACHE_FULL;
+  }
+
+  dt_imageio_flip_buffers_ui8_to_float((float *)buf, tmp, 0.0f, 255.0f, 4, jpg.width, jpg.height, jpg.width, jpg.height, 4*jpg.width, orientation);
+
+  free(tmp);
+
+  return DT_IMAGEIO_OK;
 }
 
 

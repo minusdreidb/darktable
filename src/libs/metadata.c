@@ -19,6 +19,7 @@
 #include "common/darktable.h"
 #include "common/metadata.h"
 #include "common/debug.h"
+#include "common/collection.h"
 #include "control/control.h"
 #include "control/signal.h"
 #include "control/conf.h"
@@ -146,26 +147,26 @@ static void update(dt_lib_module_t *user_data, gboolean early_bark_out)
     {
       switch(sqlite3_column_int(stmt, 0))
       {
-	case DT_METADATA_XMP_DC_CREATOR:
-	  creator_count++;
-	  creator = g_list_append(creator, value);
-	  break;
+        case DT_METADATA_XMP_DC_CREATOR:
+          creator_count++;
+          creator = g_list_append(creator, value);
+          break;
         case DT_METADATA_XMP_DC_PUBLISHER:
-	  publisher_count++;
-	  publisher = g_list_append(publisher, value);
-	  break;
+          publisher_count++;
+          publisher = g_list_append(publisher, value);
+          break;
         case DT_METADATA_XMP_DC_TITLE:
-	  title_count++;
-	  title = g_list_append(title, value);
-	  break;
+          title_count++;
+          title = g_list_append(title, value);
+          break;
         case DT_METADATA_XMP_DC_DESCRIPTION:
-	  description_count++;
-	  description = g_list_append(description, value);
-	  break;
+          description_count++;
+          description = g_list_append(description, value);
+          break;
         case DT_METADATA_XMP_DC_RIGHTS:
-	  rights_count++;
-	  rights = g_list_append(rights, value);
-	  break;
+          rights_count++;
+          rights = g_list_append(rights, value);
+          break;
       }
     }
   }
@@ -203,6 +204,10 @@ static void clear_button_clicked(GtkButton *button, gpointer user_data)
 static void write_metadata(dt_lib_module_t *self)
 {
   dt_lib_metadata_t *d  = (dt_lib_metadata_t *)self->data;
+ 
+  int32_t mouse_over_id;
+ 
+  mouse_over_id = dt_view_get_image_to_act_on();
 
   gchar *title       = gtk_combo_box_get_active_text(GTK_COMBO_BOX(d->title));
   gchar *description = gtk_combo_box_get_active_text(GTK_COMBO_BOX(d->description));
@@ -211,15 +216,15 @@ static void write_metadata(dt_lib_module_t *self)
   gchar *publisher   = gtk_combo_box_get_active_text(GTK_COMBO_BOX(d->publisher));
 
   if(title != NULL && (d->multi_title == FALSE || gtk_combo_box_get_active(GTK_COMBO_BOX(d->title)) != 0))
-    dt_metadata_set(-1, "Xmp.dc.title", title);
+    dt_metadata_set(mouse_over_id, "Xmp.dc.title", title);
   if(description != NULL && (d->multi_description == FALSE || gtk_combo_box_get_active(GTK_COMBO_BOX(d->description)) != 0))
-    dt_metadata_set(-1, "Xmp.dc.description", description);
+    dt_metadata_set(mouse_over_id, "Xmp.dc.description", description);
   if(rights != NULL && (d->multi_rights == FALSE || gtk_combo_box_get_active(GTK_COMBO_BOX(d->rights)) != 0))
-    dt_metadata_set(-1, "Xmp.dc.rights", rights);
+    dt_metadata_set(mouse_over_id, "Xmp.dc.rights", rights);
   if(creator != NULL && (d->multi_creator == FALSE || gtk_combo_box_get_active(GTK_COMBO_BOX(d->creator)) != 0))
-    dt_metadata_set(-1, "Xmp.dc.creator", creator);
+    dt_metadata_set(mouse_over_id, "Xmp.dc.creator", creator);
   if(publisher != NULL && (d->multi_publisher == FALSE || gtk_combo_box_get_active(GTK_COMBO_BOX(d->publisher)) != 0))
-    dt_metadata_set(-1, "Xmp.dc.publisher", publisher);
+    dt_metadata_set(mouse_over_id, "Xmp.dc.publisher", publisher);
 
   if(title != NULL)
     g_free(title);
@@ -232,7 +237,7 @@ static void write_metadata(dt_lib_module_t *self)
   if(publisher != NULL)
     g_free(publisher);
 
-  dt_image_synch_xmp(-1);
+  dt_image_synch_xmp(mouse_over_id);
   update(self, FALSE);
 }
 
@@ -257,12 +262,12 @@ int position()
   return 510;
 }
 
-static void _mouse_over_image_callback(gpointer instace,gpointer user_data) 
+static void _mouse_over_image_callback(gpointer instace,gpointer user_data)
 {
   dt_lib_module_t *self=(dt_lib_module_t *)user_data;
   /* lets trigger an expose for a redraw of widget */
   gtk_widget_queue_draw(GTK_WIDGET(self->widget));
-} 
+}
 
 void init_key_accels(dt_lib_module_t *self)
 {
@@ -294,12 +299,12 @@ void gui_init(dt_lib_module_t *self)
   gtk_table_set_row_spacings(GTK_TABLE(self->widget), 5);
 
   g_signal_connect(self->widget, "expose-event", G_CALLBACK(expose), self);
- 
+
   label = gtk_label_new(_("title"));
   gtk_misc_set_alignment(GTK_MISC(label), 0.0, 0.5);
   gtk_table_attach(GTK_TABLE(self->widget), label, 0, 1, 0, 1, GTK_EXPAND|GTK_FILL, 0, 0, 0);
   d->title = GTK_COMBO_BOX_ENTRY(gtk_combo_box_entry_new_text());
-  dt_gui_key_accel_block_on_focus(GTK_WIDGET(gtk_bin_get_child(GTK_BIN(d->title))));
+  dt_gui_key_accel_block_on_focus_connect(GTK_WIDGET(gtk_bin_get_child(GTK_BIN(d->title))));
   completion = gtk_entry_completion_new();
   gtk_entry_completion_set_model(completion, gtk_combo_box_get_model(GTK_COMBO_BOX(d->title)));
   gtk_entry_completion_set_text_column(completion, 0);
@@ -312,7 +317,7 @@ void gui_init(dt_lib_module_t *self)
   gtk_misc_set_alignment(GTK_MISC(label), 0.0, 0.5);
   gtk_table_attach(GTK_TABLE(self->widget), label, 0, 1, 1, 2, GTK_EXPAND|GTK_FILL, 0, 0, 0);
   d->description = GTK_COMBO_BOX_ENTRY(gtk_combo_box_entry_new_text());
-  dt_gui_key_accel_block_on_focus(GTK_WIDGET(gtk_bin_get_child(GTK_BIN(d->description))));
+  dt_gui_key_accel_block_on_focus_connect(GTK_WIDGET(gtk_bin_get_child(GTK_BIN(d->description))));
   completion = gtk_entry_completion_new();
   gtk_entry_completion_set_model(completion, gtk_combo_box_get_model(GTK_COMBO_BOX(d->description)));
   gtk_entry_completion_set_text_column(completion, 0);
@@ -325,7 +330,7 @@ void gui_init(dt_lib_module_t *self)
   gtk_misc_set_alignment(GTK_MISC(label), 0.0, 0.5);
   gtk_table_attach(GTK_TABLE(self->widget), label, 0, 1, 2, 3, GTK_EXPAND|GTK_FILL, 0, 0, 0);
   d->creator = GTK_COMBO_BOX_ENTRY(gtk_combo_box_entry_new_text());
-  dt_gui_key_accel_block_on_focus(GTK_WIDGET(gtk_bin_get_child(GTK_BIN(d->creator))));
+  dt_gui_key_accel_block_on_focus_connect(GTK_WIDGET(gtk_bin_get_child(GTK_BIN(d->creator))));
   completion = gtk_entry_completion_new();
   gtk_entry_completion_set_model(completion, gtk_combo_box_get_model(GTK_COMBO_BOX(d->creator)));
   gtk_entry_completion_set_text_column(completion, 0);
@@ -338,7 +343,7 @@ void gui_init(dt_lib_module_t *self)
   gtk_misc_set_alignment(GTK_MISC(label), 0.0, 0.5);
   gtk_table_attach(GTK_TABLE(self->widget), label, 0, 1, 3, 4, GTK_EXPAND|GTK_FILL, 0, 0, 0);
   d->publisher = GTK_COMBO_BOX_ENTRY(gtk_combo_box_entry_new_text());
-  dt_gui_key_accel_block_on_focus(GTK_WIDGET(gtk_bin_get_child(GTK_BIN(d->publisher))));
+  dt_gui_key_accel_block_on_focus_connect(GTK_WIDGET(gtk_bin_get_child(GTK_BIN(d->publisher))));
   completion = gtk_entry_completion_new();
   gtk_entry_completion_set_model(completion, gtk_combo_box_get_model(GTK_COMBO_BOX(d->publisher)));
   gtk_entry_completion_set_text_column(completion, 0);
@@ -351,7 +356,7 @@ void gui_init(dt_lib_module_t *self)
   gtk_misc_set_alignment(GTK_MISC(label), 0.0, 0.5);
   gtk_table_attach(GTK_TABLE(self->widget), label, 0, 1, 4, 5, GTK_EXPAND|GTK_FILL, 0, 0, 0);
   d->rights = GTK_COMBO_BOX_ENTRY(gtk_combo_box_entry_new_text());
-  dt_gui_key_accel_block_on_focus(GTK_WIDGET(gtk_bin_get_child(GTK_BIN(d->rights))));
+  dt_gui_key_accel_block_on_focus_connect(GTK_WIDGET(gtk_bin_get_child(GTK_BIN(d->rights))));
   completion = gtk_entry_completion_new();
   gtk_entry_completion_set_model(completion, gtk_combo_box_get_model(GTK_COMBO_BOX(d->rights)));
   gtk_entry_completion_set_text_column(completion, 0);
@@ -382,14 +387,20 @@ void gui_init(dt_lib_module_t *self)
   gtk_table_attach(GTK_TABLE(self->widget), GTK_WIDGET(hbox), 0, 2, 5, 6, GTK_EXPAND|GTK_FILL, 0, 0, 0);
 
   /* lets signup for mouse over image change signals */
-  dt_control_signal_connect(darktable.signals,DT_SIGNAL_MOUSE_OVER_IMAGE_CHANGE, 
-			    G_CALLBACK(_mouse_over_image_callback), self);
+  dt_control_signal_connect(darktable.signals,DT_SIGNAL_MOUSE_OVER_IMAGE_CHANGE,
+                            G_CALLBACK(_mouse_over_image_callback), self);
 
 }
 
 void gui_cleanup(dt_lib_module_t *self)
 {
+  dt_lib_metadata_t *d = (dt_lib_metadata_t *)self->data;
   dt_control_signal_disconnect(darktable.signals,G_CALLBACK(_mouse_over_image_callback),self);
+  dt_gui_key_accel_block_on_focus_disconnect(GTK_WIDGET(gtk_bin_get_child(GTK_BIN(d->publisher))));
+  dt_gui_key_accel_block_on_focus_disconnect(GTK_WIDGET(gtk_bin_get_child(GTK_BIN(d->rights))));
+  dt_gui_key_accel_block_on_focus_disconnect(GTK_WIDGET(gtk_bin_get_child(GTK_BIN(d->title))));
+  dt_gui_key_accel_block_on_focus_disconnect(GTK_WIDGET(gtk_bin_get_child(GTK_BIN(d->description))));
+  dt_gui_key_accel_block_on_focus_disconnect(GTK_WIDGET(gtk_bin_get_child(GTK_BIN(d->creator))));
   free(self->data);
   self->data = NULL;
 }

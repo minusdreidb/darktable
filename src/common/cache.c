@@ -17,7 +17,7 @@
 */
 
 #ifndef DT_UNIT_TEST
-  #include "common/darktable.h"
+#include "common/darktable.h"
 #endif
 #include "common/cache.h"
 
@@ -123,7 +123,7 @@ get_start_cacheline_bucket(const dt_cache_t *const cache, dt_cache_bucket_t *con
   return bucket - ((bucket - cache->table) & cache->cache_mask);
 }
 
-static void 
+static void
 add_cost(dt_cache_t    *cache,
          const int32_t  cost)
 {
@@ -222,11 +222,11 @@ dt_cache_bucket_write_release(dt_cache_bucket_t *bucket)
 
 static void
 add_key_to_beginning_of_list(
-    dt_cache_t        *cache,
-    dt_cache_bucket_t *const keys_bucket,
-    dt_cache_bucket_t *const free_bucket,
-    const uint32_t     hash,
-    const uint32_t     key)
+  dt_cache_t        *cache,
+  dt_cache_bucket_t *const keys_bucket,
+  dt_cache_bucket_t *const free_bucket,
+  const uint32_t     hash,
+  const uint32_t     key)
 {
   int32_t cost = 1;
   if(cache->allocate)
@@ -261,12 +261,12 @@ add_key_to_beginning_of_list(
 
 static void
 add_key_to_end_of_list(
-    dt_cache_t        *cache,
-    dt_cache_bucket_t *const keys_bucket,
-    dt_cache_bucket_t *const free_bucket,
-    const uint32_t     hash,
-    const uint32_t     key,
-    dt_cache_bucket_t *const last_bucket)
+  dt_cache_t        *cache,
+  dt_cache_bucket_t *const keys_bucket,
+  dt_cache_bucket_t *const free_bucket,
+  const uint32_t     hash,
+  const uint32_t     key,
+  dt_cache_bucket_t *const last_bucket)
 {
   int32_t cost = 1;
   if(cache->allocate)
@@ -352,7 +352,7 @@ dt_cache_init(dt_cache_t *cache, const int32_t capacity, const int32_t num_threa
   cache->optimize_cacheline = 0;//1;
   // No cache_mask offsetting required when not optimizing for cachelines --RAM
   cache->cache_mask = cache->optimize_cacheline ?
-    cache_line_size / sizeof(dt_cache_bucket_t) - 1 : 0;
+                      cache_line_size / sizeof(dt_cache_bucket_t) - 1 : 0;
   cache->segment_mask = adj_num_threads - 1;
   // cache->segment_shift = calc_div_shift(nearest_power_of_two(num_threads/(float)adj_num_threads)-1);
   // we want a minimum of four entries, as the hopscotch code below proceeds by disregarding the first bucket in the list,
@@ -379,12 +379,12 @@ dt_cache_init(dt_cache_t *cache, const int32_t capacity, const int32_t num_threa
   cache->cleanup = NULL;
   cache->cleanup_data = NULL;
 
-  for(int k=0;k<=cache->segment_mask;k++)
+  for(uint32_t k=0; k<=cache->segment_mask; k++)
   {
     cache->segments[k].timestamp = 0;
     cache->segments[k].lock = 0;
   }
-  for(int k=0;k<num_buckets;k++)
+  for(uint32_t k=0; k<num_buckets; k++)
   {
     cache->table[k].first_delta = DT_CACHE_NULL_DELTA;
     cache->table[k].next_delta  = DT_CACHE_NULL_DELTA;
@@ -416,12 +416,12 @@ dt_cache_cleanup(dt_cache_t *cache)
 
 void
 dt_cache_static_allocation(
-    dt_cache_t *cache,
-    uint8_t *buf,
-    const uint32_t stride)
+  dt_cache_t *cache,
+  uint8_t *buf,
+  const uint32_t stride)
 {
   const int num_buckets = cache->bucket_mask + 1;
-  for(int k=0;k<num_buckets;k++)
+  for(int k=0; k<num_buckets; k++)
   {
     cache->table[k].data = (void *)(buf + k*stride);
   }
@@ -459,7 +459,7 @@ dt_cache_size(const dt_cache_t *const cache)
 {
   uint32_t cnt = 0;
   const uint32_t num = cache->bucket_mask + 1;
-  for(int k=0;k<num;k++)
+  for(uint32_t k=0; k<num; k++)
   {
     if(cache->table[k].hash != DT_CACHE_EMPTY_HASH) cnt++;
   }
@@ -467,12 +467,12 @@ dt_cache_size(const dt_cache_t *const cache)
 }
 
 #if 0 // not sure we need this diagnostic tool:
-  float
+float
 dt_cache_percent_keys_in_cache_line(const dt_cache_t *const cache)
 {
   uint32_t total_in_cache = 0;
   uint32_t total = 0;
-  for(int k=0;k<=cache->bucket_mask;k++)
+  for(int k=0; k<=cache->bucket_mask; k++)
   {
     const dt_cache_bucket_t *curr_bucket = cache->table + k;
     if(curr_bucket->first_delta != DT_CACHE_NULL_DELTA)
@@ -558,9 +558,9 @@ lru_insert_locked(dt_cache_t        *cache,
 
 int
 dt_cache_for_all(
-    dt_cache_t *cache,
-    int (*process)(const uint32_t key, const void *data, void *user_data),
-    void *user_data)
+  dt_cache_t *cache,
+  int (*process)(const uint32_t key, const void *data, void *user_data),
+  void *user_data)
 {
   // this is not thread safe.
   //dt_cache_lock(&cache->lru_lock);
@@ -622,8 +622,8 @@ lru_check_consistency_reverse(dt_cache_t *cache)
 // never attempt to allocate a new slot.
 void*
 dt_cache_read_testget(
-    dt_cache_t     *cache,
-    const uint32_t  key)
+  dt_cache_t     *cache,
+  const uint32_t  key)
 {
   // just to support different keys:
   const uint32_t hash = key;
@@ -660,8 +660,8 @@ dt_cache_read_testget(
 //
 void*
 dt_cache_read_get(
-    dt_cache_t     *cache,
-    const uint32_t  key)
+  dt_cache_t     *cache,
+  const uint32_t  key)
 {
   assert(key != DT_CACHE_EMPTY_KEY);
 
@@ -704,7 +704,8 @@ retry_cache_full:
     }
     // end of the loop, didn't find it. need to alloc (and keep segment locked)
     break;
-wait:;
+wait:
+    ;
     // try again in 5 milliseconds
     dt_cache_sleep_ms(5);
   }
@@ -756,7 +757,8 @@ wait:;
     {
       dt_cache_lock(&cache->lru_lock);
       if(free_max_bucket->hash == DT_CACHE_EMPTY_HASH)
-      { // try that again if it's still empty
+      {
+        // try that again if it's still empty
         dt_cache_bucket_read_lock(free_max_bucket);
         add_key_to_end_of_list(cache, start_bucket, free_max_bucket, hash, key, last_bucket);
         void *data = free_max_bucket->data;
@@ -866,7 +868,8 @@ dt_cache_remove(dt_cache_t *cache, const uint32_t key)
   return 1;
 }
 
-#if 0
+#define DT_CACHE_BFL
+#ifdef DT_CACHE_BFL
 // debug helper functions, in case we want a big fat lock for dt_cache_gc():
 static int
 dt_cache_remove_no_lru_lock(dt_cache_t *cache, const uint32_t key)
@@ -897,19 +900,12 @@ dt_cache_remove_no_lru_lock(dt_cache_t *cache, const uint32_t key)
         dt_cache_unlock(&segment->lock);
         return 1;
       }
-      void *rc = curr_bucket->data;
-      const int32_t cost = curr_bucket->cost;
       remove_key(cache, segment, start_bucket, curr_bucket, last_bucket, hash);
       if(cache->optimize_cacheline)
         optimize_cacheline_use(cache, segment, curr_bucket);
       // put back into unused part of the cache: remove from lru list.
       dt_cache_unlock(&segment->lock);
       lru_remove(cache, curr_bucket);
-      // clean up the user data
-      if(cache->cleanup)
-        cache->cleanup(cache->cleanup_data, key, rc);
-      // keep track of cost
-      add_cost(cache, -cost);
       // fprintf(stderr, "[cache remove] freeing %d for %u\n", cost, key);
       return 0;
     }
@@ -953,13 +949,19 @@ dt_cache_gc(dt_cache_t *cache, const float fill_ratio)
     fprintf(stderr, "[cache gc] current cost: %u/%u\n", cache->cost, cache->cost_quota);
   }
 #endif
+#ifdef DT_CACHE_BFL
   // sorry, bfl
-  // dt_cache_lock(&cache->lru_lock);
+  dt_cache_lock(&cache->lru_lock);
+#endif
   int32_t curr;
   // get least recently used bucket
+#ifdef DT_CACHE_BFL
+  curr = cache->lru;
+#else
   dt_cache_lock(&cache->lru_lock);
   curr = cache->lru;
   dt_cache_unlock(&cache->lru_lock);
+#endif
   int i = 0;
   // while still too full:
   while(cache->cost > fill_ratio * cache->cost_quota)
@@ -975,6 +977,9 @@ dt_cache_gc(dt_cache_t *cache, const float fill_ratio)
         // dt_cache_unlock(&cache->lru_lock);
         // fprintf(stderr, "[cache gc] failed to free space!\n");
         // dt_cache_print_locked(cache);
+#ifdef DT_CACHE_BFL
+        dt_cache_unlock(&cache->lru_lock);
+#endif
         return 1;
       }
       break;
@@ -989,19 +994,28 @@ dt_cache_gc(dt_cache_t *cache, const float fill_ratio)
     // in the very unlikely case the bucket in question got just removed,
     // and the lru not cleaned up yet, but another image already occupies that slot...
     // it will be read locked and we go on. very worst case we clean up the wrong image.
+#ifdef DT_CACHE_BFL
+    const int err = dt_cache_remove_bucket_no_lru_lock(cache, curr);
+#else
     const int err = dt_cache_remove_bucket(cache, curr);
-    // =const int err = dt_cache_remove_bucket_no_lru_lock(cache, curr);
+#endif
     if(err)
     {
       // fprintf(stderr, "[cache gc] remove failed %d\n", err);
       // in case we failed, try next entry
+#ifdef DT_CACHE_BFL
+      curr = cache->table[curr].mru;
+#else
       dt_cache_lock(&cache->lru_lock);
       curr = cache->table[curr].mru;
       dt_cache_unlock(&cache->lru_lock);
+#endif
     }
     i++;
   }
-  // dt_cache_unlock(&cache->lru_lock);
+#ifdef DT_CACHE_BFL
+  dt_cache_unlock(&cache->lru_lock);
+#endif
 #if 0
   if(cache->bucket_mask <= 4)
   {
@@ -1075,7 +1089,8 @@ dt_cache_write_get(dt_cache_t *cache, const uint32_t key)
     }
     // didn't find any entry :(
     break;
-wait:;
+wait:
+    ;
     // try again in 5 milliseconds
     dt_cache_sleep_ms(5);
   }
@@ -1153,14 +1168,14 @@ dt_cache_write_release(dt_cache_t *cache, const uint32_t key)
 void dt_cache_print(dt_cache_t *cache)
 {
   fprintf(stderr, "[cache] full entries:\n");
-  for(int k=0;k<=cache->bucket_mask;k++)
+  for(uint32_t k=0; k<=cache->bucket_mask; k++)
   {
     if(cache->table[k].key != DT_CACHE_EMPTY_KEY)
       fprintf(stderr, "[cache] bucket %d holds key %u with locks r %d w %d\n",
-          k, (cache->table[k].key & 0x1fffffff)+1, cache->table[k].read, cache->table[k].write);
+              k, (cache->table[k].key & 0x1fffffff)+1, cache->table[k].read, cache->table[k].write);
     else
       fprintf(stderr, "[cache] bucket %d is empty with locks r %d w %d\n",
-          k, cache->table[k].read, cache->table[k].write);
+              k, cache->table[k].read, cache->table[k].write);
   }
   fprintf(stderr, "[cache] lru entries:\n");
   dt_cache_lock(&cache->lru_lock);
@@ -1169,11 +1184,11 @@ void dt_cache_print(dt_cache_t *cache)
   {
     if(cache->table[curr].key != DT_CACHE_EMPTY_KEY)
       fprintf(stderr, "[cache] bucket %d holds key %u with locks r %d w %d\n",
-          curr, (cache->table[curr].key & 0x1fffffff)+1, cache->table[curr].read, cache->table[curr].write);
+              curr, (cache->table[curr].key & 0x1fffffff)+1, cache->table[curr].read, cache->table[curr].write);
     else
     {
       fprintf(stderr, "[cache] bucket %d is empty with locks r %d w %d\n",
-          curr, cache->table[curr].read, cache->table[curr].write);
+              curr, cache->table[curr].read, cache->table[curr].write);
       // this list should only ever contain valid buffers.
       assert(0);
     }
@@ -1196,7 +1211,7 @@ void dt_cache_print_locked(dt_cache_t *cache)
     if(cache->table[curr].key != DT_CACHE_EMPTY_KEY && (cache->table[curr].read || cache->table[curr].write))
     {
       fprintf(stderr, "[cache] bucket[%d|%d] holds key %u with locks r %d w %d\n",
-          i, curr, (cache->table[curr].key & 0x1fffffff)+1, cache->table[curr].read, cache->table[curr].write);
+              i, curr, (cache->table[curr].key & 0x1fffffff)+1, cache->table[curr].read, cache->table[curr].write);
     }
     if(curr == cache->mru) break;
     int32_t next = cache->table[curr].mru;

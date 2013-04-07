@@ -95,7 +95,7 @@ operation_tags ()
 
 int flags()
 {
-  return IOP_FLAGS_ALLOW_TILING | IOP_FLAGS_TILING_FULL_ROI;
+  return IOP_FLAGS_ALLOW_TILING | IOP_FLAGS_TILING_FULL_ROI | IOP_FLAGS_ONE_INSTANCE;
 }
 
 
@@ -123,6 +123,59 @@ backtransform(const int32_t *x, int32_t *o, const int32_t orientation, int32_t i
   {
     o[0] = iw - o[0] - 1;
   }
+}
+
+int distort_transform(dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, float *points, int points_count)
+{
+  if (!self->enabled) return 2;
+  dt_iop_flip_data_t *d = (dt_iop_flip_data_t *)piece->data;
+
+  float x,y;
+
+  for (int i=0; i<points_count*2; i+=2)
+  {  
+    x = points[i];
+    y = points[i+1];
+    if(d->orientation & 2) y = piece->buf_in.height - points[i+1];
+    if(d->orientation & 1) x = piece->buf_in.width - points[i];
+    if(d->orientation & 4)
+    {
+      float yy = y;
+      y = x;
+      x = yy;
+    }    
+    points[i] = x;
+    points[i+1] = y;
+  }
+  
+  return 1;
+}
+int distort_backtransform(dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, float *points, int points_count)
+{
+  if (!self->enabled) return 2;
+  dt_iop_flip_data_t *d = (dt_iop_flip_data_t *)piece->data;
+
+  float x,y;
+
+  for (int i=0; i<points_count*2; i+=2)
+  {  
+    if(d->orientation & 4)
+    {
+      y = points[i];
+      x = points[i+1];
+    }
+    else
+    {
+      x = points[i];
+      y = points[i+1];
+    }
+    if(d->orientation & 2) y = piece->buf_in.height - y;
+    if(d->orientation & 1) x = piece->buf_in.width - x;
+    points[i] = x;
+    points[i+1] = y;
+  }
+  
+  return 1;
 }
 
 // 1st pass: how large would the output be, given this input roi?
@@ -186,7 +239,7 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
   const int stride = bpp*roi_in->width;
 
   dt_imageio_flip_buffers((char *)ovoid, (const char *)ivoid, bpp,
-      roi_in->width, roi_in->height, roi_in->width, roi_in->height, stride, d->orientation);
+                          roi_in->width, roi_in->height, roi_in->width, roi_in->height, stride, d->orientation);
 }
 
 
@@ -210,7 +263,7 @@ process_cl (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_mem 
   dt_opencl_set_kernel_arg(devid, gd->kernel_flip, 1, sizeof(cl_mem), (void *)&dev_out);
   dt_opencl_set_kernel_arg(devid, gd->kernel_flip, 2, sizeof(int), (void *)&width);
   dt_opencl_set_kernel_arg(devid, gd->kernel_flip, 3, sizeof(int), (void *)&height);
-  dt_opencl_set_kernel_arg(devid, gd->kernel_flip, 4, sizeof(int), (void *)&orientation); 
+  dt_opencl_set_kernel_arg(devid, gd->kernel_flip, 4, sizeof(int), (void *)&orientation);
   err = dt_opencl_enqueue_kernel_2d(devid, gd->kernel_flip, sizes);
 
   if(err != CL_SUCCESS) goto error;
@@ -258,7 +311,10 @@ void cleanup_pipe (struct dt_iop_module_t *self, dt_dev_pixelpipe_t *pipe, dt_de
 
 void init_presets (dt_iop_module_so_t *self)
 {
-  dt_iop_flip_params_t p = (dt_iop_flip_params_t) { 0 };
+  dt_iop_flip_params_t p = (dt_iop_flip_params_t)
+  {
+    0
+  };
   DT_DEBUG_SQLITE3_EXEC(dt_database_get(darktable.db), "begin", NULL, NULL, NULL);
   p.orientation = 1;
   dt_gui_presets_add_generic(_("flip horizontally"), self->op, self->version(), &p, sizeof(p), 1);
@@ -275,10 +331,13 @@ void init_presets (dt_iop_module_so_t *self)
 
 void reload_defaults(dt_iop_module_t *self)
 {
-  dt_iop_flip_params_t tmp = (dt_iop_flip_params_t) { 0 };
+  dt_iop_flip_params_t tmp = (dt_iop_flip_params_t)
+  {
+    0
+  };
   self->default_enabled = 0;
   if(self->dev->image_storage.legacy_flip.user_flip != 0 &&
-     self->dev->image_storage.legacy_flip.user_flip != 0xff)
+      self->dev->image_storage.legacy_flip.user_flip != 0xff)
   {
     sqlite3_stmt *stmt;
     DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), "select * from history where imgid = ?1 and operation = 'flip'", -1, &stmt, NULL);
@@ -308,7 +367,7 @@ void init(dt_iop_module_t *module)
   module->default_enabled = 0;
   module->params_size = sizeof(dt_iop_flip_params_t);
   module->gui_data = NULL;
-  module->priority = 235; // module order created by iop_dependencies.py, do not edit!
+  module->priority = 236; // module order created by iop_dependencies.py, do not edit!
 }
 
 void cleanup(dt_iop_module_t *module)

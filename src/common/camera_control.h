@@ -30,16 +30,16 @@
 typedef struct dt_camera_t
 {
   /** A pointer to the model string of camera. */
-  const char *model;
+  char *model;
   /** A pointer to the port string of camera. */
-  const char *port;
+  char *port;
   /** Camera summary text */
   CameraText summary;
 
   /** Camera configuration cache */
   CameraWidget *configuration;
 
-  /** Registered timeout func */  
+  /** Registered timeout func */
   CameraTimeoutFunc timeout;
 
   gboolean config_changed;
@@ -130,6 +130,8 @@ dt_camera_error_t;
 typedef struct dt_camctl_t
 {
   dt_pthread_mutex_t lock;
+  dt_pthread_mutex_t listeners_lock;
+
   /** Camera event thread. */
   pthread_t camera_event_thread;
   /** List of registered listeners of camera control. \see dt_camctl_register_listener() , dt_camctl_unregister_listener() */
@@ -229,7 +231,8 @@ void dt_camctl_camera_stop_live_view(const dt_camctl_t *c);
 const char *dt_camctl_camera_get_model(const dt_camctl_t *c,const dt_camera_t *cam);
 
 /** Set a property value \param cam Pointer to dt_camera_t if NULL the camctl->active_camera is used. */
-void dt_camctl_camera_set_property(const dt_camctl_t *c,const dt_camera_t *cam,const char *property_name, const char *value);
+void dt_camctl_camera_set_property_string(const dt_camctl_t *c,const dt_camera_t *cam,const char *property_name, const char *value);
+void dt_camctl_camera_set_property_int(const dt_camctl_t *c,const dt_camera_t *cam,const char *property_name, const int value);
 /** Get a property value from chached configuration. \param cam Pointer to dt_camera_t if NULL the camctl->active_camera is used. */
 const char*dt_camctl_camera_get_property(const dt_camctl_t *c,const dt_camera_t *cam,const char *property_name);
 /** Check if property exists. */

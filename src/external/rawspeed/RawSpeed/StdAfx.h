@@ -58,11 +58,24 @@
 #endif // __unix__
 #include <math.h>
 #include "pthread.h"
-#include "jpeglib.h"
 
+#ifdef FAR  // libjpeg also defines FAR
+#ifdef WIN32_LEAN_AND_MEAN
+#undef FAR
+#endif
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+#include "jpeglib.h"
+#ifdef __cplusplus
+}
+#endif
 // STL
 #include <iostream>
 #include <string>
+#include <sstream>
 #include <vector>
 #include <map>
 #include <list>

@@ -111,12 +111,14 @@ void dt_colorlabels_toggle_label (const int imgid, const int color)
 }
 
 gboolean dt_colorlabels_key_accel_callback(GtkAccelGroup *accel_group,
-                                       GObject *acceleratable, guint keyval,
-                                       GdkModifierType modifier, gpointer data)
+    GObject *acceleratable, guint keyval,
+    GdkModifierType modifier, gpointer data)
 {
   const long int mode = (long int)data;
-  int selected;
-  DT_CTL_GET_GLOBAL(selected, lib_image_mouse_over_id);
+  int32_t selected;
+ 
+  selected = dt_view_get_image_to_act_on(); 
+  
   if(selected <= 0)
   {
     switch(mode)
@@ -163,12 +165,18 @@ const char* dt_colorlabels_to_string(int label)
 {
   switch(label)
   {
-    case 0: return "red";
-    case 1: return "yellow";
-    case 2: return "green";
-    case 3: return "blue";
-    case 4: return "purple";
-    default: return ""; // shouldn't happen ...
+    case 0:
+      return "red";
+    case 1:
+      return "yellow";
+    case 2:
+      return "green";
+    case 3:
+      return "blue";
+    case 4:
+      return "purple";
+    default:
+      return ""; // shouldn't happen ...
   }
 }
 

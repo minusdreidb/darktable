@@ -106,7 +106,8 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
   memcpy(out,in,roi_out->width*roi_out->height*ch*sizeof(float));
 
   int rad = 256*(fmin(100.0,data->size+1)/100.0);
-  const int radius = MIN(256, ceilf(rad * roi_in->scale / piece->iscale));
+  const float _r = ceilf(rad * roi_in->scale / piece->iscale);
+  const int radius = MIN(256, _r);
 
   const float scale = 1.0 / exp2f ( -1.0*(fmin(100.0,data->strength+1)/100.0));
 
@@ -302,7 +303,7 @@ void init(dt_iop_module_t *module)
   module->params = malloc(sizeof(dt_iop_bloom_params_t));
   module->default_params = malloc(sizeof(dt_iop_bloom_params_t));
   module->default_enabled = 0;
-  module->priority = 450; // module order created by iop_dependencies.py, do not edit!
+  module->priority = 436; // module order created by iop_dependencies.py, do not edit!
   module->params_size = sizeof(dt_iop_bloom_params_t);
   module->gui_data = NULL;
   dt_iop_bloom_params_t tmp = (dt_iop_bloom_params_t)

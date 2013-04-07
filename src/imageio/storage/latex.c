@@ -28,6 +28,7 @@
 #include "control/control.h"
 #include "control/conf.h"
 #include "gui/gtk.h"
+#include "gui/gtkentry.h"
 #include "dtgtk/button.h"
 #include "dtgtk/paint.h"
 #include <stdio.h>
@@ -46,9 +47,9 @@ latex_t;
 // saved params
 typedef struct dt_imageio_latex_t
 {
-  char filename[1024];
+  char filename[DT_MAX_PATH_LEN];
   char title[1024];
-  char cached_dirname[1024]; // expanded during first img store, not stored in param struct.
+  char cached_dirname[DT_MAX_PATH_LEN]; // expanded during first img store, not stored in param struct.
   dt_variables_params_t *vp;
   GList *l;
 }
@@ -90,8 +91,8 @@ button_clicked (GtkWidget *widget, dt_imageio_module_storage_t *self)
   if (gtk_dialog_run (GTK_DIALOG (filechooser)) == GTK_RESPONSE_ACCEPT)
   {
     gchar *dir = gtk_file_chooser_get_filename (GTK_FILE_CHOOSER (filechooser));
-    char composed[1024];
-    snprintf(composed, 1024, "%s/$(FILE_NAME)", dir);
+    char composed[DT_MAX_PATH_LEN];
+    snprintf(composed, DT_MAX_PATH_LEN, "%s/$(FILE_NAME)", dir);
     gtk_entry_set_text(GTK_ENTRY(d->entry), composed);
     dt_conf_set_string("plugins/imageio/storage/latex/file_directory", composed);
     g_free(dir);
@@ -118,31 +119,43 @@ gui_init (dt_imageio_module_storage_t *self)
     g_free(dir);
   }
   d->entry = GTK_ENTRY(widget);
-  dt_gui_key_accel_block_on_focus (GTK_WIDGET (d->entry));
-  g_object_set(G_OBJECT(widget), "tooltip-text", _("enter the path where to create the latex template:\n"
-               "$(ROLL_NAME) - roll of the input image\n"
-               "$(FILE_DIRECTORY) - directory of the input image\n"
-               "$(FILE_NAME) - basename of the input image\n"
-               "$(FILE_EXTENSION) - extension of the input image\n"
-               "$(SEQUENCE) - sequence number\n"
-               "$(YEAR) - year\n"
-               "$(MONTH) - month\n"
-               "$(DAY) - day\n"
-               "$(HOUR) - hour\n"
-               "$(MINUTE) - minute\n"
-               "$(SECOND) - second\n"
-               "$(EXIF_YEAR) - exif year\n"
-               "$(EXIF_MONTH) - exif month\n"
-               "$(EXIF_DAY) - exif day\n"
-               "$(EXIF_HOUR) - exif hour\n"
-               "$(EXIF_MINUTE) - exif minute\n"
-               "$(EXIF_SECOND) - exif second\n"
-               "$(STARS) - star rating\n"
-               "$(LABELS) - colorlabels\n"
-               "$(PICTURES_FOLDER) - pictures folder\n"
-               "$(HOME_FOLDER) - home folder\n"
-               "$(DESKTOP_FOLDER) - desktop folder"
-                                                  ), (char *)NULL);
+  dt_gui_key_accel_block_on_focus_connect(GTK_WIDGET (d->entry));
+
+  dt_gtkentry_completion_spec compl_list[] =
+  {
+    { "ROLL_NAME", _("$(ROLL_NAME) - roll of the input image") },
+    { "FILE_FOLDER", _("$(FILE_FOLDER) - folder containing the input image") },
+    { "FILE_NAME", _("$(FILE_NAME) - basename of the input image") },
+    { "FILE_EXTENSION", _("$(FILE_EXTENSION) - extension of the input image") },
+    { "SEQUENCE", _("$(SEQUENCE) - sequence number") },
+    { "YEAR", _("$(YEAR) - year") },
+    { "MONTH", _("$(MONTH) - month") },
+    { "DAY", _("$(DAY) - day") },
+    { "HOUR", _("$(HOUR) - hour") },
+    { "MINUTE", _("$(MINUTE) - minute") },
+    { "SECOND", _("$(SECOND) - second") },
+    { "EXIF_YEAR", _("$(EXIF_YEAR) - exif year") },
+    { "EXIF_MONTH", _("$(EXIF_MONTH) - exif month") },
+    { "EXIF_DAY", _("$(EXIF_DAY) - exif day") },
+    { "EXIF_HOUR", _("$(EXIF_HOUR) - exif hour") },
+    { "EXIF_MINUTE", _("$(EXIF_MINUTE) - exif minute") },
+    { "EXIF_SECOND", _("$(EXIF_SECOND) - exif second") },
+    { "STARS", _("$(STARS) - star rating") },
+    { "LABELS", _("$(LABELS) - colorlabels") },
+    { "PICTURES_FOLDER", _("$(PICTURES_FOLDER) - pictures folder") },
+    { "HOME", _("$(HOME) - home folder") },
+    { "DESKTOP", _("$(DESKTOP) - desktop folder") },
+    { NULL, NULL }
+  };
+
+  dt_gtkentry_setup_completion(GTK_ENTRY(widget), compl_list);
+
+  char *tooltip_text = dt_gtkentry_build_completion_tooltip_text (
+                         _("enter the path where to put exported images\nrecognized variables:"),
+                         compl_list);
+  g_object_set(G_OBJECT(widget), "tooltip-text", tooltip_text, (char *)NULL);
+  g_free(tooltip_text);
+
   widget = dtgtk_button_new(dtgtk_cairo_paint_directory, 0);
   gtk_widget_set_size_request(widget, 18, 18);
   g_object_set(G_OBJECT(widget), "tooltip-text", _("select directory"), (char *)NULL);
@@ -156,7 +169,7 @@ gui_init (dt_imageio_module_storage_t *self)
   gtk_box_pack_start(GTK_BOX(hbox), widget, FALSE, FALSE, 0);
   d->title_entry = GTK_ENTRY(gtk_entry_new());
   gtk_box_pack_start(GTK_BOX(hbox), GTK_WIDGET(d->title_entry), TRUE, TRUE, 0);
-  dt_gui_key_accel_block_on_focus (GTK_WIDGET (d->title_entry));
+  dt_gui_key_accel_block_on_focus_connect(GTK_WIDGET (d->title_entry));
   // TODO: support title, author, subject, keywords (collect tags?)
   g_object_set(G_OBJECT(d->title_entry), "tooltip-text", _("enter the title of the book"), (char *)NULL);
   dir = dt_conf_get_string("plugins/imageio/storage/latex/title");
@@ -170,6 +183,9 @@ gui_init (dt_imageio_module_storage_t *self)
 void
 gui_cleanup (dt_imageio_module_storage_t *self)
 {
+  latex_t *d = (latex_t *)self->gui_data;
+  dt_gui_key_accel_block_on_focus_disconnect(GTK_WIDGET (d->entry));
+  dt_gui_key_accel_block_on_focus_disconnect(GTK_WIDGET (d->title_entry));
   free(self->gui_data);
 }
 
@@ -188,33 +204,30 @@ sort_pos(pair_t *a, pair_t *b)
 }
 
 int
-store (dt_imageio_module_data_t *sdata, const int imgid, dt_imageio_module_format_t *format, dt_imageio_module_data_t *fdata, const int num, const int total)
+store (dt_imageio_module_data_t *sdata, const int imgid, dt_imageio_module_format_t *format, dt_imageio_module_data_t *fdata,
+       const int num, const int total, const gboolean high_quality)
 {
   dt_imageio_latex_t *d = (dt_imageio_latex_t *)sdata;
 
-  char filename[1024]= {0};
-  char dirname[1024]= {0};
-  dt_image_full_path(imgid, dirname, 1024);
+  char filename[DT_MAX_PATH_LEN]= {0};
+  char dirname[DT_MAX_PATH_LEN]= {0};
+  dt_image_full_path(imgid, dirname, DT_MAX_PATH_LEN);
   // we're potentially called in parallel. have sequence number synchronized:
   dt_pthread_mutex_lock(&darktable.plugin_threadsafe);
   {
 
-    char tmp_dir[1024];
-    dt_variables_expand(d->vp, d->filename, TRUE);
-    g_strlcpy(tmp_dir, dt_variables_get_result(d->vp), 1024);
-
     // if filenamepattern is a directory just add ${FILE_NAME} as default..
-    if ( g_file_test(tmp_dir, G_FILE_TEST_EXISTS | G_FILE_TEST_IS_DIR) || ((d->filename+strlen(d->filename)-1)[0]=='/' || (d->filename+strlen(d->filename)-1)[0]=='\\') )
-      snprintf (d->filename+strlen(d->filename), 1024-strlen(d->filename), "/$(FILE_NAME)");
+    if ( g_file_test(d->filename, G_FILE_TEST_EXISTS | G_FILE_TEST_IS_DIR) || ((d->filename+strlen(d->filename))[0]=='/' || (d->filename+strlen(d->filename))[0]=='\\') )
+      snprintf (d->filename+strlen(d->filename), DT_MAX_PATH_LEN-strlen(d->filename), "$(FILE_NAME)");
 
     // avoid braindead export which is bound to overwrite at random:
     if(total > 1 && !g_strrstr(d->filename, "$"))
     {
-      snprintf(d->filename+strlen(d->filename), 1024-strlen(d->filename), "_$(SEQUENCE)");
+      snprintf(d->filename+strlen(d->filename), DT_MAX_PATH_LEN-strlen(d->filename), "_$(SEQUENCE)");
     }
 
     gchar* fixed_path = dt_util_fix_path(d->filename);
-    g_strlcpy(d->filename, fixed_path, 1024);
+    g_strlcpy(d->filename, fixed_path, DT_MAX_PATH_LEN);
     g_free(fixed_path);
 
     d->vp->filename = dirname;
@@ -222,8 +235,8 @@ store (dt_imageio_module_data_t *sdata, const int imgid, dt_imageio_module_forma
     d->vp->imgid = imgid;
     d->vp->sequence = num;
     dt_variables_expand(d->vp, d->filename, TRUE);
-    g_strlcpy(filename, dt_variables_get_result(d->vp), 1024);
-    g_strlcpy(dirname, filename, 1024);
+    g_strlcpy(filename, dt_variables_get_result(d->vp), DT_MAX_PATH_LEN);
+    g_strlcpy(dirname, filename, DT_MAX_PATH_LEN);
 
     const char *ext = format->extension(fdata);
     char *c = dirname + strlen(dirname);
@@ -238,11 +251,11 @@ store (dt_imageio_module_data_t *sdata, const int imgid, dt_imageio_module_forma
     }
 
     // store away dir.
-    snprintf(d->cached_dirname, 1024, "%s", dirname);
+    snprintf(d->cached_dirname, DT_MAX_PATH_LEN, "%s", dirname);
 
     c = filename + strlen(filename);
-    for(; c>filename && *c != '.' && *c != '/' ; c--);
-    if(c <= filename || *c=='/') c = filename + strlen(filename);
+//     for(; c>filename && *c != '.' && *c != '/' ; c--);
+//     if(c <= filename || *c=='/') c = filename + strlen(filename);
 
     sprintf(c,".%s",ext);
 
@@ -298,15 +311,15 @@ store (dt_imageio_module_data_t *sdata, const int imgid, dt_imageio_module_forma
     snprintf(relfilename, 256, "%s", c);
 
     snprintf(pair->line, 4096,
-        "\\begin{minipage}{\\imgwidth}%%\n"
-        "\\drawtrimcorners%%\n"
-        "\\vskip0pt plus 1filll\n"
-        "\\begin{minipage}{\\imgwidth}%%\n"
-        " \\hfil\\includegraphics[width=\\imgwidth,height=\\imgheight,keepaspectratio]{%s}\\hfil\n"
-        "  %% put text under image here\n"
-        "\\end{minipage}\n"
-        "\\end{minipage}\n"
-        "\\newpage\n\n", relfilename);
+             "\\begin{minipage}{\\imgwidth}%%\n"
+             "\\drawtrimcorners%%\n"
+             "\\vskip0pt plus 1filll\n"
+             "\\begin{minipage}{\\imgwidth}%%\n"
+             " \\hfil\\includegraphics[width=\\imgwidth,height=\\imgheight,keepaspectratio]{%s}\\hfil\n"
+             "  %% put text under image here\n"
+             "\\end{minipage}\n"
+             "\\end{minipage}\n"
+             "\\newpage\n\n", relfilename);
 
     pair->pos = num;
     // g_free(title);
@@ -317,7 +330,7 @@ store (dt_imageio_module_data_t *sdata, const int imgid, dt_imageio_module_forma
   dt_pthread_mutex_unlock(&darktable.plugin_threadsafe);
 
   /* export image to file */
-  dt_imageio_export(imgid, filename, format, fdata);
+  dt_imageio_export(imgid, filename, format, fdata, high_quality);
 
   printf("[export_job] exported to `%s'\n", filename);
   char *trunc = filename + strlen(filename) - 32;
@@ -329,8 +342,8 @@ store (dt_imageio_module_data_t *sdata, const int imgid, dt_imageio_module_forma
 static void
 copy_res(const char *src, const char *dst)
 {
-  char share[1024];
-  dt_loc_get_datadir(share, 1024);
+  char share[DT_MAX_PATH_LEN];
+  dt_loc_get_datadir(share, DT_MAX_PATH_LEN);
   gchar *sourcefile = g_build_filename(share, src, NULL);
   char* content = NULL;
   FILE *fin = fopen(sourcefile, "rb");
@@ -364,13 +377,13 @@ void
 finalize_store(dt_imageio_module_storage_t *self, void *dd)
 {
   dt_imageio_latex_t *d = (dt_imageio_latex_t *)dd;
-  char filename[1024];
-  snprintf(filename, 1024, "%s", d->cached_dirname);
+  char filename[DT_MAX_PATH_LEN];
+  snprintf(filename, DT_MAX_PATH_LEN, "%s", d->cached_dirname);
   char *c = filename + strlen(filename);
 
   sprintf(c, "/photobook.cls");
   copy_res("/latex/photobook.cls", filename);
-  
+
   sprintf(c, "/main.tex");
 
   const char *title = d->title;
@@ -378,17 +391,17 @@ finalize_store(dt_imageio_module_storage_t *self, void *dd)
   FILE *f = fopen(filename, "wb");
   if(!f) return;
   fprintf(f,
-    "\\newcommand{\\dttitle}{%s}\n"
-    "\\newcommand{\\dtauthor}{the author}\n"
-    "\\newcommand{\\dtsubject}{the matter}\n"
-    "\\newcommand{\\dtkeywords}{this, that}\n"
-    "\\documentclass{photobook} %% use [draftmode] for preview\n"
-    "\\color{white}\n"
-    "\\pagecolor{black}\n"
-    "\\begin{document}\n"
-    "\\maketitle\n"
-    "\\pagestyle{empty}\n",
-    title);
+          "\\newcommand{\\dttitle}{%s}\n"
+          "\\newcommand{\\dtauthor}{the author}\n"
+          "\\newcommand{\\dtsubject}{the matter}\n"
+          "\\newcommand{\\dtkeywords}{this, that}\n"
+          "\\documentclass{photobook} %% use [draftmode] for preview\n"
+          "\\color{white}\n"
+          "\\pagecolor{black}\n"
+          "\\begin{document}\n"
+          "\\maketitle\n"
+          "\\pagestyle{empty}\n",
+          title);
 
   while(d->l)
   {
@@ -399,9 +412,9 @@ finalize_store(dt_imageio_module_storage_t *self, void *dd)
   }
 
   fprintf(f,
-    "\\end{document}"
-    "%% created with darktable "PACKAGE_VERSION"\n"
-    );
+          "\\end{document}"
+          "%% created with darktable "PACKAGE_VERSION"\n"
+         );
   fclose(f);
 }
 
@@ -417,10 +430,10 @@ get_params(dt_imageio_module_storage_t *self, int* size)
   d->l = NULL;
   dt_variables_params_init(&d->vp);
   const char *text = gtk_entry_get_text(GTK_ENTRY(g->entry));
-  g_strlcpy(d->filename, text, 1024);
+  g_strlcpy(d->filename, text, DT_MAX_PATH_LEN);
   dt_conf_set_string("plugins/imageio/storage/latex/file_directory", d->filename);
   text = gtk_entry_get_text(GTK_ENTRY(g->title_entry));
-  g_strlcpy(d->title, text, 1024);
+  g_strlcpy(d->title, text, DT_MAX_PATH_LEN);
   dt_conf_set_string("plugins/imageio/storage/latex/title", d->title);
   return d;
 }

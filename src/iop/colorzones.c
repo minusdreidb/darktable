@@ -35,14 +35,15 @@
 #include <string.h>
 #include <inttypes.h>
 
-DT_MODULE(1)
+DT_MODULE(2)
 
 #define DT_IOP_COLORZONES_INSET 5
 #define DT_IOP_COLORZONES_CURVE_INFL .3f
 #define DT_IOP_COLORZONES_RES 64
-#define DT_IOP_COLORZONES_BANDS 6
 #define DT_IOP_COLORZONES_LUT_RES 0x10000
 
+#define DT_IOP_COLORZONES_BANDS 8
+#define DT_IOP_COLORZONES1_BANDS 6
 
 typedef enum dt_iop_colorzones_channel_t
 {
@@ -58,6 +59,13 @@ typedef struct dt_iop_colorzones_params_t
   float equalizer_x[3][DT_IOP_COLORZONES_BANDS], equalizer_y[3][DT_IOP_COLORZONES_BANDS];
 }
 dt_iop_colorzones_params_t;
+
+typedef struct dt_iop_colorzones_params1_t
+{
+  int32_t channel;
+  float equalizer_x[3][DT_IOP_COLORZONES1_BANDS], equalizer_y[3][DT_IOP_COLORZONES1_BANDS];
+}
+dt_iop_colorzones_params1_t;
 
 typedef struct dt_iop_colorzones_gui_data_t
 {
@@ -114,6 +122,48 @@ groups ()
   return IOP_GROUP_COLOR;
 }
 
+int
+legacy_params (dt_iop_module_t *self, const void *const old_params, const int old_version, void *new_params, const int new_version)
+{
+  if (old_version == 1 && new_version == 2)
+  {
+    const dt_iop_colorzones_params1_t *old = old_params;
+    dt_iop_colorzones_params_t *new = new_params;
+
+    new->channel = old->channel;
+
+    // keep first point
+
+    for (int i=0; i<3; i++)
+    {
+      new->equalizer_x[i][0] = old->equalizer_x[i][0];
+      new->equalizer_y[i][0] = old->equalizer_y[i][0];
+    }
+
+    for (int i=0; i<3; i++)
+      for (int k=0; k<6; k++)
+      {
+        //  first+1 and last-1 are set to just after and before the first and last point
+        if (k==0)
+          new->equalizer_x[i][k+1] = old->equalizer_x[i][k]+0.001;
+        else if (k==5)
+          new->equalizer_x[i][k+1] = old->equalizer_x[i][k]-0.001;
+        else
+          new->equalizer_x[i][k+1] = old->equalizer_x[i][k];
+        new->equalizer_y[i][k+1] = old->equalizer_y[i][k];
+      }
+
+    // keep last point
+
+    for (int i=0; i<3; i++)
+    {
+      new->equalizer_x[i][7] = old->equalizer_x[i][5];
+      new->equalizer_y[i][7] = old->equalizer_y[i][5];
+    }
+    return 0;
+  }
+  return 1;
+}
 
 static float
 lookup(const float *lut, const float i)
@@ -191,7 +241,7 @@ process_cl (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_mem 
   dt_opencl_set_kernel_arg(devid, gd->kernel_colorzones, 1, sizeof(cl_mem), (void *)&dev_out);
   dt_opencl_set_kernel_arg(devid, gd->kernel_colorzones, 2, sizeof(int), (void *)&width);
   dt_opencl_set_kernel_arg(devid, gd->kernel_colorzones, 3, sizeof(int), (void *)&height);
-  dt_opencl_set_kernel_arg(devid, gd->kernel_colorzones, 4, sizeof(int), (void *)&d->channel); 
+  dt_opencl_set_kernel_arg(devid, gd->kernel_colorzones, 4, sizeof(int), (void *)&d->channel);
   dt_opencl_set_kernel_arg(devid, gd->kernel_colorzones, 5, sizeof(cl_mem), (void *)&dev_L);
   dt_opencl_set_kernel_arg(devid, gd->kernel_colorzones, 6, sizeof(cl_mem), (void *)&dev_a);
   dt_opencl_set_kernel_arg(devid, gd->kernel_colorzones, 7, sizeof(cl_mem), (void *)&dev_b);
@@ -200,7 +250,7 @@ process_cl (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_mem 
   if(err != CL_SUCCESS) goto error;
   dt_opencl_release_mem_object(dev_L);
   dt_opencl_release_mem_object(dev_a);
-  dt_opencl_release_mem_object(dev_b); 
+  dt_opencl_release_mem_object(dev_b);
   return TRUE;
 
 error:
@@ -305,7 +355,7 @@ void init(dt_iop_module_t *module)
   module->params = malloc(sizeof(dt_iop_colorzones_params_t));
   module->default_params = malloc(sizeof(dt_iop_colorzones_params_t));
   module->default_enabled = 0; // we're a rather slow and rare op.
-  module->priority = 529; // module order created by iop_dependencies.py, do not edit!
+  module->priority = 545; // module order created by iop_dependencies.py, do not edit!
   module->params_size = sizeof(dt_iop_colorzones_params_t);
   module->gui_data = NULL;
   dt_iop_colorzones_params_t tmp;
@@ -332,6 +382,9 @@ void init_presets (dt_iop_module_so_t *self)
   dt_iop_colorzones_params_t p;
 
   DT_DEBUG_SQLITE3_EXEC(dt_database_get(darktable.db), "begin", NULL, NULL, NULL);
+
+  // red black white
+
   p.channel = DT_IOP_COLORZONES_h;
   for(int k=0; k<DT_IOP_COLORZONES_BANDS; k++)
   {
@@ -344,10 +397,12 @@ void init_presets (dt_iop_module_so_t *self)
   }
   p.equalizer_y[DT_IOP_COLORZONES_C][0] = p.equalizer_y[DT_IOP_COLORZONES_C][DT_IOP_COLORZONES_BANDS-1] = 0.65;
   p.equalizer_x[DT_IOP_COLORZONES_C][1] = 3./16.;
-  p.equalizer_x[DT_IOP_COLORZONES_C][2] = 0.50;
-  p.equalizer_x[DT_IOP_COLORZONES_C][3] = 0.51;
-  p.equalizer_x[DT_IOP_COLORZONES_C][4] = 15./16.;
-  dt_gui_presets_add_generic(_("red black white"), self->op, self->version(), &p, sizeof(p), 1);
+  p.equalizer_x[DT_IOP_COLORZONES_C][3] = 0.50;
+  p.equalizer_x[DT_IOP_COLORZONES_C][4] = 0.51;
+  p.equalizer_x[DT_IOP_COLORZONES_C][6] = 15./16.;
+  dt_gui_presets_add_generic(_("red black white"), self->op, 2, &p, sizeof(p), 1);
+
+  // black white and skin tones
 
   p.channel = DT_IOP_COLORZONES_h;
   for(int k=0; k<DT_IOP_COLORZONES_BANDS; k++)
@@ -361,8 +416,11 @@ void init_presets (dt_iop_module_so_t *self)
   }
   p.equalizer_y[DT_IOP_COLORZONES_C][0] = p.equalizer_y[DT_IOP_COLORZONES_C][DT_IOP_COLORZONES_BANDS-1] = 0.5;
   p.equalizer_x[DT_IOP_COLORZONES_C][2] = 0.25f;
+  p.equalizer_x[DT_IOP_COLORZONES_C][1] = 0.16f;
   p.equalizer_y[DT_IOP_COLORZONES_C][1] = 0.3f;
-  dt_gui_presets_add_generic(_("black white and skin tones"), self->op, self->version(), &p, sizeof(p), 1);
+  dt_gui_presets_add_generic(_("black white and skin tones"), self->op, 2, &p, sizeof(p), 1);
+
+  // polarizing filter
 
   p.channel = DT_IOP_COLORZONES_C;
   for(int k=0; k<DT_IOP_COLORZONES_BANDS; k++)
@@ -374,89 +432,67 @@ void init_presets (dt_iop_module_so_t *self)
     p.equalizer_x[DT_IOP_COLORZONES_C][k] = k/(DT_IOP_COLORZONES_BANDS-1.);
     p.equalizer_x[DT_IOP_COLORZONES_h][k] = k/(DT_IOP_COLORZONES_BANDS-1.);
   }
-  for(int k=2; k<DT_IOP_COLORZONES_BANDS; k++)
-    p.equalizer_y[DT_IOP_COLORZONES_C][k] += (k-1.5)/(DT_IOP_COLORZONES_BANDS-2.0) * 0.25;
   for(int k=3; k<DT_IOP_COLORZONES_BANDS; k++)
-    p.equalizer_y[DT_IOP_COLORZONES_L][k] -= (k-2.5)/(DT_IOP_COLORZONES_BANDS-3.0) * 0.35;
-  dt_gui_presets_add_generic(_("polarizing filter"), self->op, self->version(), &p, sizeof(p), 1);
+    p.equalizer_y[DT_IOP_COLORZONES_C][k] += (k-2.5)/(DT_IOP_COLORZONES_BANDS-2.0) * 0.25;
+  for(int k=4; k<DT_IOP_COLORZONES_BANDS; k++)
+    p.equalizer_y[DT_IOP_COLORZONES_L][k] -= (k-3.5)/(DT_IOP_COLORZONES_BANDS-3.0) * 0.35;
+  dt_gui_presets_add_generic(_("polarizing filter"), self->op, 2, &p, sizeof(p), 1);
 
-  p.channel = 2;
-  p.equalizer_x[0][0] = 0.000000;
-  p.equalizer_y[0][0] = 0.500000;
-  p.equalizer_x[0][1] = 0.200000;
-  p.equalizer_y[0][1] = 0.500000;
-  p.equalizer_x[0][2] = 0.400000;
-  p.equalizer_y[0][2] = 0.500000;
-  p.equalizer_x[0][3] = 0.600000;
-  p.equalizer_y[0][3] = 0.500000;
-  p.equalizer_x[0][4] = 0.800000;
-  p.equalizer_y[0][4] = 0.500000;
-  p.equalizer_x[0][5] = 1.000000;
-  p.equalizer_y[0][5] = 0.500000;
-  p.equalizer_x[1][0] = 0.000000;
-  p.equalizer_y[1][0] = 0.468932;
-  p.equalizer_x[1][1] = 0.120155;
-  p.equalizer_y[1][1] = 0.445975;
-  p.equalizer_x[1][2] = 0.248062;
-  p.equalizer_y[1][2] = 0.468932;
-  p.equalizer_x[1][3] = 0.500000;
-  p.equalizer_y[1][3] = 0.499667;
-  p.equalizer_x[1][4] = 0.748062;
-  p.equalizer_y[1][4] = 0.500000;
-  p.equalizer_x[1][5] = 1.000000;
-  p.equalizer_y[1][5] = 0.468932;
-  p.equalizer_x[2][0] = 0.000000;
-  p.equalizer_y[2][0] = 0.500000;
-  p.equalizer_x[2][1] = 0.200000;
-  p.equalizer_y[2][1] = 0.500000;
-  p.equalizer_x[2][2] = 0.400000;
-  p.equalizer_y[2][2] = 0.500000;
-  p.equalizer_x[2][3] = 0.600000;
-  p.equalizer_y[2][3] = 0.500000;
-  p.equalizer_x[2][4] = 0.800000;
-  p.equalizer_y[2][4] = 0.500000;
-  p.equalizer_x[2][5] = 1.000000;
-  p.equalizer_y[2][5] = 0.500000;
-  dt_gui_presets_add_generic(_("natural skin tones"), self->op, self->version(), &p, sizeof(p), 1);
+  // natural skin tone
 
-  p.channel = 2;
-  p.equalizer_x[0][0] = 0.000000;
-  p.equalizer_y[0][0] = 0.613040;
-  p.equalizer_x[0][1] = 0.245283;
-  p.equalizer_y[0][1] = 0.447962;
-  p.equalizer_x[0][2] = 0.498113;
-  p.equalizer_y[0][2] = 0.529201;
-  p.equalizer_x[0][3] = 0.641509;
-  p.equalizer_y[0][3] = 0.664967;
-  p.equalizer_x[0][4] = 0.879245;
-  p.equalizer_y[0][4] = 0.777294;
-  p.equalizer_x[0][5] = 1.000000;
-  p.equalizer_y[0][5] = 0.613040;
-  p.equalizer_x[1][0] = 0.000000;
-  p.equalizer_y[1][0] = 0.000000;
-  p.equalizer_x[1][1] = 0.200000;
-  p.equalizer_y[1][1] = 0.000000;
-  p.equalizer_x[1][2] = 0.400000;
-  p.equalizer_y[1][2] = 0.000000;
-  p.equalizer_x[1][3] = 0.600000;
-  p.equalizer_y[1][3] = 0.000000;
-  p.equalizer_x[1][4] = 0.800000;
-  p.equalizer_y[1][4] = 0.000000;
-  p.equalizer_x[1][5] = 1.000000;
-  p.equalizer_y[1][5] = 0.000000;
-  p.equalizer_x[2][0] = 0.000000;
-  p.equalizer_y[2][0] = 0.500000;
-  p.equalizer_x[2][1] = 0.200000;
-  p.equalizer_y[2][1] = 0.500000;
-  p.equalizer_x[2][2] = 0.400000;
-  p.equalizer_y[2][2] = 0.500000;
-  p.equalizer_x[2][3] = 0.600000;
-  p.equalizer_y[2][3] = 0.500000;
-  p.equalizer_x[2][4] = 0.800000;
-  p.equalizer_y[2][4] = 0.500000;
-  p.equalizer_x[2][5] = 1.000000;
-  p.equalizer_y[2][5] = 0.500000;
-  dt_gui_presets_add_generic(_("black & white film"), self->op, self->version(), &p, sizeof(p), 1);
+  p.channel = DT_IOP_COLORZONES_h;
+  for(int k=0; k<DT_IOP_COLORZONES_BANDS; k++)
+  {
+    p.equalizer_y[DT_IOP_COLORZONES_L][k] = .5f;
+    p.equalizer_y[DT_IOP_COLORZONES_h][k] = .5f;
+    p.equalizer_x[DT_IOP_COLORZONES_L][k] = k/(DT_IOP_COLORZONES_BANDS-1.);
+    p.equalizer_x[DT_IOP_COLORZONES_h][k] = k/(DT_IOP_COLORZONES_BANDS-1.);
+  }
+  p.equalizer_x[DT_IOP_COLORZONES_C][0] = 0.000000;
+  p.equalizer_y[DT_IOP_COLORZONES_C][0] = 0.468932;
+  p.equalizer_x[DT_IOP_COLORZONES_C][1] = 0.010000;
+  p.equalizer_y[DT_IOP_COLORZONES_C][1] = 0.468932;
+  p.equalizer_x[DT_IOP_COLORZONES_C][2] = 0.120155;
+  p.equalizer_y[DT_IOP_COLORZONES_C][2] = 0.445975;
+  p.equalizer_x[DT_IOP_COLORZONES_C][3] = 0.248062;
+  p.equalizer_y[DT_IOP_COLORZONES_C][3] = 0.468932;
+  p.equalizer_x[DT_IOP_COLORZONES_C][4] = 0.500000;
+  p.equalizer_y[DT_IOP_COLORZONES_C][4] = 0.499667;
+  p.equalizer_x[DT_IOP_COLORZONES_C][5] = 0.748062;
+  p.equalizer_y[DT_IOP_COLORZONES_C][5] = 0.500000;
+  p.equalizer_x[DT_IOP_COLORZONES_C][6] = 0.990000;
+  p.equalizer_y[DT_IOP_COLORZONES_C][6] = 0.468932;
+  p.equalizer_x[DT_IOP_COLORZONES_C][7] = 1.000000;
+  p.equalizer_y[DT_IOP_COLORZONES_C][7] = 0.468932;
+  dt_gui_presets_add_generic(_("natural skin tones"), self->op, 2, &p, sizeof(p), 1);
+
+  // black and white film
+
+  p.channel = DT_IOP_COLORZONES_h;
+  for(int k=0; k<DT_IOP_COLORZONES_BANDS; k++)
+  {
+    p.equalizer_y[DT_IOP_COLORZONES_C][k] = .0f;
+    p.equalizer_y[DT_IOP_COLORZONES_h][k] = .5f;
+    p.equalizer_x[DT_IOP_COLORZONES_C][k] = k/(DT_IOP_COLORZONES_BANDS-1.);
+    p.equalizer_x[DT_IOP_COLORZONES_h][k] = k/(DT_IOP_COLORZONES_BANDS-1.);
+  }
+  p.equalizer_x[DT_IOP_COLORZONES_L][0] = 0.000000;
+  p.equalizer_y[DT_IOP_COLORZONES_L][0] = 0.613040;
+  p.equalizer_x[DT_IOP_COLORZONES_L][1] = 0.010000;
+  p.equalizer_y[DT_IOP_COLORZONES_L][1] = 0.613040;
+  p.equalizer_x[DT_IOP_COLORZONES_L][2] = 0.245283;
+  p.equalizer_y[DT_IOP_COLORZONES_L][2] = 0.447962;
+  p.equalizer_x[DT_IOP_COLORZONES_L][3] = 0.498113;
+  p.equalizer_y[DT_IOP_COLORZONES_L][3] = 0.529201;
+  p.equalizer_x[DT_IOP_COLORZONES_L][4] = 0.641509;
+  p.equalizer_y[DT_IOP_COLORZONES_L][4] = 0.664967;
+  p.equalizer_x[DT_IOP_COLORZONES_L][5] = 0.879245;
+  p.equalizer_y[DT_IOP_COLORZONES_L][5] = 0.777294;
+  p.equalizer_x[DT_IOP_COLORZONES_L][6] = 0.990000;
+  p.equalizer_y[DT_IOP_COLORZONES_L][6] = 0.613040;
+  p.equalizer_x[DT_IOP_COLORZONES_L][7] = 1.000000;
+  p.equalizer_y[DT_IOP_COLORZONES_L][7] = 0.613040;
+  dt_gui_presets_add_generic(_("black & white film"), self->op, 2, &p, sizeof(p), 1);
 
   DT_DEBUG_SQLITE3_EXEC(dt_database_get(darktable.db), "commit", NULL, NULL, NULL);
 }
@@ -797,7 +833,7 @@ colorzones_button_press(GtkWidget *widget, GdkEventButton *event, gpointer user_
   {
     // reset current curve
     dt_iop_colorzones_params_t *p = (dt_iop_colorzones_params_t *)self->params;
-    dt_iop_colorzones_params_t *d = (dt_iop_colorzones_params_t *)self->factory_params;
+    dt_iop_colorzones_params_t *d = (dt_iop_colorzones_params_t *)self->default_params;
     dt_iop_colorzones_gui_data_t *c = (dt_iop_colorzones_gui_data_t *)self->gui_data;
     for(int k=0; k<DT_IOP_COLORZONES_BANDS; k++)
     {
@@ -890,13 +926,19 @@ select_by_changed(GtkWidget *widget, gpointer user_data)
 static void
 request_pick_toggled(GtkToggleButton *togglebutton, dt_iop_module_t *self)
 {
-  self->request_color_pick = gtk_toggle_button_get_active(togglebutton);
   if(darktable.gui->reset) return;
-  
-  /* set the area sample size*/
+
+  self->request_color_pick = (gtk_toggle_button_get_active(togglebutton) ? 1 : 0);
+
+  /* set the area sample size */
   if (self->request_color_pick)
+  {
     dt_lib_colorpicker_set_point(darktable.lib, 0.5, 0.5);
-  
+    dt_dev_reprocess_all(self->dev);
+  }
+  else
+    dt_control_queue_redraw();
+
   if(self->off) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(self->off), 1);
   dt_iop_request_focus(self);
 }

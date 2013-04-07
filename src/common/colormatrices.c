@@ -34,6 +34,9 @@ static dt_profiled_colormatrix_t dt_profiled_colormatrices[] =
   // Robert Park, ColorChecker Passport, strobe, well lit
   { "PENTAX K-x",                   { 821548, 337357,  42923}, { 247818, 1042969, -218735}, { -4105, -293045, 1085129}, {792206, 821823, 668640}},
 
+  // Alessandro Miliucci, Wolf Faust IT8, direct sunlight, well lit
+  { "PENTAX K-r",                   { 960464, 390625,  16312}, { 295563, 1230850, -255936}, {-11536, -339279, 1276337}, {688797, 717697, 605698}},
+
   // Denis Cheremisov, CMP Digital Target 4, strobe, well lit
   { "PENTAX K-5",                   { 795456, 343674,  70389}, { 137650,  907654, -299805}, { 31097, -251328, 1054321}, {663452, 689972, 517853}},
 
@@ -106,6 +109,11 @@ static dt_profiled_colormatrix_t dt_profiled_colormatrices[] =
   { "Canon EOS 600D",               { 998352, 349960,  -2716}, {  48340, 1270676, -315140}, {114716, -360596, 1265518}, {671249, 670547, 606339}},
   { "Canon EOS Kiss Digital X5",    { 998352, 349960,  -2716}, {  48340, 1270676, -315140}, {114716, -360596, 1265518}, {671249, 670547, 606339}},
 
+  // Christian Carlsson, Wolf Faust IT8, direct sunlight, well lit
+  { "Canon EOS REBEL T4i",          {1098572, 401901,  -6561}, { -33066, 1257919, -374954}, {190125, -352509, 1469009}, {731064, 752655, 594757}},
+  { "Canon EOS 650D",               {1098572, 401901,  -6561}, { -33066, 1257919, -374954}, {190125, -352509, 1469009}, {731064, 752655, 594757}},
+  { "Canon EOS Kiss X6i",           {1098572, 401901,  -6561}, { -33066, 1257919, -374954}, {190125, -352509, 1469009}, {731064, 752655, 594757}},
+
   // M. Emre Meydan, Wolf Faust IT8, direct sunlight, well lit
   { "Canon EOS DIGITAL REBEL XS",   { 875580, 325546,   -912}, { 298859, 1301361, -153580}, { 26108, -378876, 1150177}, {675369, 697647, 606659}},
   { "Canon EOS 1000D",              { 875580, 325546,   -912}, { 298859, 1301361, -153580}, { 26108, -378876, 1150177}, {675369, 697647, 606659}},
@@ -159,11 +167,17 @@ static dt_profiled_colormatrix_t dt_profiled_colormatrices[] =
   // Robert Park, ColorChecker Passport, strobe, well lit
   { "NIKON COOLPIX P7000",          { 804947, 229630,  97717}, { 178146, 1138763, -395233}, { 88699, -282013, 1234650}, {809998, 842819, 682144}},
 
+  // Wolfgang Kuehnel, Wolf Faust IT8, strobe, well lit
+  { "MINOLTA DYNAX 5D",             { 910599, 389618,  20218}, { 330353, 1223724, -116943}, { 24384, -307190, 1156891}, {604309, 629196, 525848}},
+
   // Karl Mikaelsson, Homebrew ColorChecker, strobe, well lit
   { "SONY DSLR-A100",               { 823853, 374588,  28259}, { 220200,  934509, -108643}, { 48141, -226440, 1062881}, {689651, 715225, 602127}},
 
   // Alexander Rabtchevich, Wolf Faust IT8, direct sunlight, well lit
   { "SONY DSLR-A200",               { 846786, 366302, -22858}, { 311584, 1046249, -107056}, { 54596, -192993, 1191406}, {708405, 744507, 596771}},
+
+  // Wolfgang Kuehnel, Wolf Faust IT8, strobe, well lit
+  { "SONY DSLR-A230",               { 890442, 398560,  24979}, { 376419, 1215424,  -86807}, {  7294, -299591, 1116592}, {578903, 597946, 494522}},
 
   // Stephane Chauveau, Wolf Faust IT8, direct sunlight, well lit
   { "SONY DSLR-A550",               {1031235, 405899,   1572}, { 185623, 1122162, -272659}, {-25528, -329514, 1249969}, {729797, 753586, 633530}},
@@ -180,14 +194,23 @@ static dt_profiled_colormatrix_t dt_profiled_colormatrices[] =
   // David Meier, Wolf Faust IT8, direct sunlight, well lit
   { "SONY SLT-A55V",                { 969696, 407043,  40268}, { 218201, 1182556, -285400}, { 21042, -342819, 1260223}, {762085, 793961, 670151}},
 
+  // Wolfgang Kuehnel, Wolf Faust IT8, strobe, well lit
+  { "SONY NEX-3",                   {1157837, 503723,  40894}, { 194550, 1279465, -297058}, {-80719, -471252, 1316238}, {669724, 694839, 586731}},
+
   // Denis Cheremisov, CMP Digital Target 4, strobe, well lit
   { "SONY NEX-5N",                  { 913406, 394043,   3237}, { 206253, 1085022,  -19917}, {-69138, -377472, 1038483}, {800079, 824112, 674850}},
+
+  // Josef Wells, Wolf Faust IT8, strobe, well lit
+  { "SONY DSC-RX100",               { 862366, 283417,  42526}, { 302124, 1254868, -333084}, { 84610, -236816, 1327515}, {681137, 699600, 590942}},
 
   // Mark Haun, Wolf Faust IT8, direct sunlight, well lit
   { "OLYMPUS E-PL1",                { 824387, 288086,  -7355}, { 299500, 1148865, -308929}, { 91858, -198425, 1346603}, {720139, 750717, 619751}},
 
   // Eugene Kraf, Wolf Faust IT8, direct sunlight, well lit
   { "OLYMPUS E-PL2",                { 785522, 280624,  28503}, { 322266, 1211975, -305984}, { 82550, -246841, 1278198}, {731506, 752808, 645309}},
+
+  // Frederic Crozat, Wolf Faust IT8, direct sunlight, well lit
+  { "OLYMPUS E-M5",                 { 937775, 279129,  75378}, { 232697, 1345169, -493317}, { 62012, -354202, 1458389}, {722229, 755142, 623749}},
 
   // Karl Mikaelsson, Homebrew ColorChecker, strobe, well lit
   { "OLYMPUS E-500",                { 925171, 247681,  26367}, { 257187, 1270187, -455826}, {-87784, -426529, 1383041}, {790421, 812775, 708054}},

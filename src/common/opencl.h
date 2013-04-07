@@ -83,10 +83,18 @@ typedef struct dt_opencl_device_t
   int eventsconsolidated;
   int maxevents;
   int lostevents;
+  int totalevents;
+  int totalsuccess;
+  int totallost;
+  int nvidia_sm_20;
+  const char *vendor;
+  const char *name;
+  const char *cname;
   cl_int summary;
 }
 dt_opencl_device_t;
 
+struct dt_bilateral_cl_global_t;
 /**
  * main struct, stored in darktable.opencl.
  * holds pointers to all
@@ -95,10 +103,26 @@ typedef struct dt_opencl_t
 {
   dt_pthread_mutex_t lock;
   int inited;
+  int avoid_atomics;
+  int use_events;
+  int async_pixelpipe;
+  int number_event_handles;
+  int synch_cache;
+  int micro_nap;
   int enabled;
   int num_devs;
+  int *dev_priority_image;
+  int *dev_priority_preview;
+  int *dev_priority_export;
+  int *dev_priority_thumbnail;
   dt_opencl_device_t *dev;
   dt_dlopencl_t *dlocl;
+
+  // global kernels for bilateral filtering, to be reused by a few plugins.
+  struct dt_bilateral_cl_global_t *bilateral;
+
+  // global kernels for gaussian filtering, to be reused by a few plugins.
+  struct dt_gaussian_cl_global_t *gaussian;
 }
 dt_opencl_t;
 
@@ -114,18 +138,23 @@ int dt_opencl_finish(const int devid);
 /** enqueues a synchronization point. */
 int dt_opencl_enqueue_barrier(const int devid);
 
-/** locks a device for your thread's exclusive use. blocks if it's busy. pass -1 to let dt chose a device.
- *  always use the devid returned, in case you didn't get your request! */
-int dt_opencl_lock_device(const int dev);
+/** parse a single token of priority string and store priorities in priority_list */
+void dt_opencl_priority_parse(char *configstr, int *priority_list);
+
+/** parse a complete priority string */
+void dt_opencl_priorities_parse(const char *configstr);
+
+/** locks a device for your thread's exclusive use */
+int dt_opencl_lock_device(const int pipetype);
 
 /** done with your command queue. */
 void dt_opencl_unlock_device(const int dev);
 
 /** loads the given .cl file and returns a reference to an internal program. */
-int dt_opencl_load_program(const int dev, const char *filename);
+int dt_opencl_load_program(const int dev, const int prog, const char *filename, const char* binname, const char* cachedir, char* md5sum, int* loaded_cached);
 
 /** builds the given program. */
-int dt_opencl_build_program(const int dev, const int program);
+int dt_opencl_build_program(const int dev, const int prog, const char* binname, const char* cachedir, char* md5sum, int loaded_cached, const char* kerneldir);
 
 /** inits a kernel. returns the index or -1 if fail. */
 int dt_opencl_create_kernel(const int program, const char *name);
@@ -170,11 +199,19 @@ int dt_opencl_read_host_from_device(const int devid, void *host, void *device, c
 
 int dt_opencl_read_host_from_device_rowpitch(const int devid, void *host, void *device, const int width, const int height, const int rowpitch);
 
+int dt_opencl_read_host_from_device_non_blocking(const int devid, void *host, void *device, const int width, const int height, const int bpp);
+
+int dt_opencl_read_host_from_device_rowpitch_non_blocking(const int devid, void *host, void *device, const int width, const int height, const int rowpitch);
+
 int dt_opencl_read_host_from_device_raw(const int devid, void *host, void *device, const size_t *origin, const size_t *region, const int rowpitch, const int blocking);
 
 int dt_opencl_write_host_to_device(const int devid, void *host, void *device, const int width, const int height, const int bpp);
 
 int dt_opencl_write_host_to_device_rowpitch(const int devid, void *host, void *device, const int width, const int height, const int rowpitch);
+
+int dt_opencl_write_host_to_device_non_blocking(const int devid, void *host, void *device, const int width, const int height, const int bpp);
+
+int dt_opencl_write_host_to_device_rowpitch_non_blocking(const int devid, void *host, void *device, const int width, const int height, const int rowpitch);
 
 int dt_opencl_write_host_to_device_raw(const int devid, void *host, void *device, const size_t *origin, const size_t *region, const int rowpitch, const int blocking);
 
@@ -193,6 +230,8 @@ void* dt_opencl_alloc_device_use_host_pointer(const int devid, const int width, 
 int dt_opencl_enqueue_copy_image_to_buffer(const int devid, cl_mem src_image, cl_mem dst_buffer, size_t *origin, size_t *region, size_t offset);
 
 int dt_opencl_enqueue_copy_buffer_to_image(const int devid, cl_mem src_buffer, cl_mem dst_image, size_t offset, size_t *origin, size_t *region);
+
+int dt_opencl_enqueue_copy_buffer_to_buffer(const int devid, cl_mem src_buffer, cl_mem dst_buffer, size_t srcoffset, size_t dstoffset, size_t size);
 
 int dt_opencl_read_buffer_from_device(const int devid, void *host, void *device, const size_t offset, const size_t size, const int blocking);
 

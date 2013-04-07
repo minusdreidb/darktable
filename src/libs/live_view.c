@@ -48,7 +48,8 @@
 
 #define HANDLE_SIZE 0.02
 
-static const cairo_operator_t _overlay_modes[] = {
+static const cairo_operator_t _overlay_modes[] =
+{
   CAIRO_OPERATOR_OVER,
   CAIRO_OPERATOR_XOR,
   CAIRO_OPERATOR_ADD,
@@ -216,9 +217,9 @@ static void _zoom_live_view_clicked(GtkWidget *widget, gpointer user_data)
   {
     cam->live_view_zoom = !cam->live_view_zoom;
     if(cam->live_view_zoom == TRUE)
-      dt_camctl_camera_set_property(darktable.camctl, NULL, "eoszoom", "5");
+      dt_camctl_camera_set_property_string(darktable.camctl, NULL, "eoszoom", "5");
     else
-      dt_camctl_camera_set_property(darktable.camctl, NULL, "eoszoom", "1");
+      dt_camctl_camera_set_property_string(darktable.camctl, NULL, "eoszoom", "1");
   }
 }
 
@@ -227,7 +228,7 @@ static void _focus_button_clicked(GtkWidget *widget, gpointer user_data)
 {
   long int focus = (long int) user_data;
   if(focus >= 0 && focus <= 5)
-    dt_camctl_camera_set_property(darktable.camctl, NULL, "manualfocusdrive", g_dgettext("libgphoto2-2", focus_array[focus]));
+    dt_camctl_camera_set_property_string(darktable.camctl, NULL, "manualfocusdrive", g_dgettext("libgphoto2-2", focus_array[focus]));
 }
 
 static void _toggle_flip_clicked(GtkWidget *widget, gpointer user_data)
@@ -517,9 +518,9 @@ gui_post_expose(dt_lib_module_t *self, cairo_t *cr, int32_t width, int32_t heigh
       if(zoom == 1)
       {
         scale = fminf(
-              fminf(w, pw) / (float)buf.width,
-              fminf(h, ph) / (float)buf.height
-              );
+                  fminf(w, pw) / (float)buf.width,
+                  fminf(h, ph) / (float)buf.height
+                );
 
       }
       else scale = fminf(w*imgwd/(float)buf.width, h*imgwd/(float)buf.height);
@@ -538,11 +539,33 @@ gui_post_expose(dt_lib_module_t *self, cairo_t *cr, int32_t width, int32_t heigh
         double x0, y0, x1, y1;
         switch(lib->splitline_rotation)
         {
-          case 0: x0=0.0; y0=0.0; x1=buf.width*lib->splitline_x; y1=buf.height; break;
-          case 1: x0=0.0; y0=0.0; x1=buf.width; y1=buf.height*lib->splitline_y; break;
-          case 2: x0=buf.width*lib->splitline_x; y0=0.0; x1=buf.width; y1=buf.height; break;
-          case 3: x0=0.0; y0=buf.height*lib->splitline_y; x1=buf.width; y1=buf.height; break;
-          default: fprintf(stderr, "OMFG, the world will collapse, this shouldn't be reachable!\n"); return;
+          case 0:
+            x0=0.0;
+            y0=0.0;
+            x1=buf.width*lib->splitline_x;
+            y1=buf.height;
+            break;
+          case 1:
+            x0=0.0;
+            y0=0.0;
+            x1=buf.width;
+            y1=buf.height*lib->splitline_y;
+            break;
+          case 2:
+            x0=buf.width*lib->splitline_x;
+            y0=0.0;
+            x1=buf.width;
+            y1=buf.height;
+            break;
+          case 3:
+            x0=0.0;
+            y0=buf.height*lib->splitline_y;
+            x1=buf.width;
+            y1=buf.height;
+            break;
+          default:
+            fprintf(stderr, "OMFG, the world will collapse, this shouldn't be reachable!\n");
+            return;
         }
 
         cairo_rectangle(cr, x0, y0, x1, y1);
@@ -586,7 +609,10 @@ gui_post_expose(dt_lib_module_t *self, cairo_t *cr, int32_t width, int32_t heigh
       int x0=sl_x, y0=0.0, x1=x0, y1=height;
       if(lib->splitline_rotation % 2 != 0)
       {
-        x0=0.0; y0=sl_y; x1=width; y1=y0;
+        x0=0.0;
+        y0=sl_y;
+        x1=width;
+        y1=y0;
       }
       gboolean mouse_over_control = (lib->splitline_rotation%2==0)?(fabsf(sl_x-pointerx)<5):(fabsf(sl_y-pointery)<5);
       cairo_save(cr);
@@ -612,13 +638,15 @@ gui_post_expose(dt_lib_module_t *self, cairo_t *cr, int32_t width, int32_t heigh
   // GUIDES
   if(cam->live_view_rotation%2 == 1)
   {
-    gint tmp = pw; pw = ph; ph = tmp;
+    gint tmp = pw;
+    pw = ph;
+    ph = tmp;
   }
   float scale = 1.0;
 //   if(cam->live_view_zoom == FALSE)
 //   {
-    if(pw > w) scale = w/pw;
-    if(ph > h) scale = fminf(scale, h/ph);
+  if(pw > w) scale = w/pw;
+  if(ph > h) scale = fminf(scale, h/ph);
 //   }
   double sw = scale*pw;
   double sh = scale*ph;
@@ -752,7 +780,18 @@ int button_pressed (struct dt_lib_module_t *self, double x, double y, int which,
   dt_lib_live_view_t *lib = (dt_lib_live_view_t *)self->data;
   int result = 0;
 
-  if(lib->imgid > 0 && dt_bauhaus_combobox_get(lib->overlay_splitline))
+  int imgid = 0;
+  switch(dt_bauhaus_combobox_get(lib->overlay))
+  {
+    case OVERLAY_SELECTED:
+      imgid = dt_view_tethering_get_selected_imgid(darktable.view_manager);
+      break;
+    case OVERLAY_ID:
+      imgid = lib->imgid;
+      break;
+  }
+
+  if(imgid > 0 && dt_bauhaus_combobox_get(lib->overlay_splitline))
   {
     const double width = lib->overlay_x1 - lib->overlay_x0;
     const double height = lib->overlay_y1 - lib->overlay_y0;

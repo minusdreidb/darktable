@@ -1,4 +1,4 @@
-<chapter>
+<chapter status="final" id="darkroom chapter">
 <chapterinfo>
 <keywordset>
   <keyword>darkroom</keyword>
@@ -6,139 +6,56 @@
 </keywordset>
 </chapterinfo>
 <title>Darkroom</title>
-<para>The darkroom view is where you develop your image...</para>
+<para>The darkroom view is where you develop your image.</para>
 <screenshot>
 	<screeninfo>The darkroom view</screeninfo>
 	<graphic fileref="images/darkroom_view.png" scalefit="1" width="80%"></graphic>
 </screenshot>
 
-<sect1><title>Overview</title>
-	<para>In darkroom you are in develop mode for the specific image; here you have a lot of tools (named module) to
-		develop you image.
+<sect1 status="final"><title>Overview</title>
+	<para>Darkroom mode is for photograpic development of the image you selected from the lighttable. Lots of tools, named
+        modules, are available for processing that image.
 	</para>
-	<para>On the left side you have the navigation, snapshots and history panels, each of them being described below; 
-	in the right panel you can see the histogram and then a list of available modules to use when working with your image. 
-	At the bottom of the right panel you can enable/disable view of individual modules.
+	<para>On the left hand side you have navigation, snapshot and history panels, described in <xref linkend="darkroom panels"/>. 
+	In the right hand panel you can see the histogram and a list of modules available for working with the image. 
+	At the bottom of the right hand panel you can enable/disable view of individual modules.
 	</para>
-	<para>Since darktable 0.6.1, modules are grouped into four groups: basic, color, correct, effect.
-	However, you can view all modules by selecting no group.
+	<para>Modules are organized into five functional groups: basic, tone, color, correction and effect as described in
+        <xref linkend="module groups"/>.
+        You either view all modules in one long list or instead click on a group to just display modules belonging to that group.
 	</para>
 	<para>For those interested in how it works, modules are applied on images following a bottom-to-top order.
 	That means, that if you activated the view of all modules (by selecting no groups), the first module to be applied
-	will be "import a RAW" at the bottom of the right panel, whereas the last one will be "splittoning" at the 
-	top of the right panel.
+	will frequently be <link linkend="invert"><emphasis>invert</emphasis></link> at the bottom of the right panel, whereas the last 
+        one will be <link linkend="dithering"><emphasis>dithering</emphasis></link> at the top of the right panel.
 	That order can not be changed by user, so modules are always applied following the same order.
 	</para>
 
-	<para>You can use <emphasis>middle-click</emphasis>  to zoom 1:1. A double <emphasis>middle-click</emphasis>  takes you to 2:1.
+	<para>You can use <emphasis>middle-click</emphasis> to zoom 1:1. A double <emphasis>middle-click</emphasis> takes you to 2:1.
 	</para>
 
-	<para>You can export directly from the darkroom by using <emphasis>ctrl-e</emphasis> shortcut. Parameters are those currently selected in lighttable.</para>
+	<para>You normally export multiple images from the lighttable view but you can also export the current image directly from the darkroom by using 
+        the shortcut <emphasis>ctrl-e</emphasis>. Export parameters are then those currently selected in the lighttable.</para>
 
 </sect1>
-<sect1 status="draft"><title>Filmstrip</title>
-	<para>The filmstrip is used to quickly switch between image to develop in darkroom view, the images viewed are the same
-		as the ones in the lighttable view. 
+<sect1 status="final" id="filmstrip"><title>Filmstrip</title>
+	<para>The optional filmstrip can be used to quickly switch between images while remaining in the darkroom view. The images viewed are the same
+		as the ones in the lighttable view.
 	</para>
-	<para>The filmstrip can be switch on and off using <emphasis>ctrl-f</emphasis> shortcut.</para>
-
+	<para>The filmstrip can be switched on and off using the shortcut <emphasis>ctrl-f</emphasis>. You can scroll with your mouse to quickly navigate
+              through the images and change the height of the filmstrip panel by dragging its top.</para>
+	<graphic fileref="darkroom/images/filmstrip.png" scalefit="1" width="80%" align="center" />
 
 </sect1>
-<sect1><title>Panels</title>
-	<sect2 status="draft"><title>Navigation</title>
-		<informaltable frame="none"><tgroup cols="2" colsep="0" rowsep="0">
-				<colspec colwidth='70%'/>
-				<colspec colwidth='30%'/>
-				<tbody>
-					<row>						
-						<entry>This panels shows the whole image and a rectangle is showing the current zoom view that  you see, you can move this rectangle to 
-								pan around in same zoomlevel.
-						</entry>
-						<entry>
-							<graphic fileref="darkroom/images/panel_navigation.png" scalefit="1" width="80%" align="center" />
-						</entry>
-					</row>
-				</tbody>
-			</tgroup>
-		</informaltable>
-	</sect2>
-	<sect2 status="final"><title>Snapshots</title>
-		<informaltable frame="none"><tgroup cols="2" colsep="0" rowsep="0">
-				<colspec colwidth='70%'/>
-				<colspec colwidth='30%'/>
-				<tbody>
-					<row>						
-						<entry>You can take a snapshot of what is displayed in the center view; 
-							this snapshot can then be selected and is overlayed in the current center view to help you with a side by side comparasion 
-							(left: snapshot, right: active) when you are tuning parameters of a module. 
-							In the active view, history remains usable in order to compare with the snapshot.
-						</entry>
-						<entry>
-							<graphic fileref="darkroom/images/panel_snapshots.png" scalefit="1" width="80%" align="center" />
-						</entry>
-					</row>
-				</tbody>
-			</tgroup>
-		</informaltable>
-	</sect2>
-	<sect2 status="draft"><title>Metadata</title>
-		<para>Shows the metadata for an image, same as in lighttable mode.
-		</para>
-	</sect2>
-	<sect2 status="draft"><title>History</title>
-		<informaltable frame="none"><tgroup cols="2" colsep="0" rowsep="0">
-				<colspec colwidth='70%'/>
-				<colspec colwidth='30%'/>
-				<tbody>
-					<row>						
-						<entry>
-						<para>The historystack lists every change of state (activate/de-activated) for all modules.
-            					Here you can select a point in stack to return to that point of development history.
-            					If you then activate a new module, all modules above the current point will be discarded.
-						</para>
-						<para>
-            					Hitting 'compress historystack' generates the shortest historystack that produces the
-            					current image, i.e. suppressing all de-activated modules.
-						</para>
-						<para>The button to the right lets you create a new styles by poping-up a new window.
-						Use the first line to name your style, the second to add a searchable description.
-						The "advanced presets" allows you chose which modules are to be taken into account for the styles.
-						</para>
-						</entry>
-						<entry>
-							<graphic fileref="darkroom/images/panel_history.png" scalefit="1" width="80%" align="center" />
-						</entry>
-					</row>
-				</tbody>
-			</tgroup>
-		</informaltable>
-	</sect2>
-	<sect2 status="draft"><title>Histogram</title>
-		<informaltable frame="none"><tgroup cols="2" colsep="0" rowsep="0">
-				<colspec colwidth='70%'/>
-				<colspec colwidth='30%'/>
-				<tbody>
-					<row>						
-						<entry>Show a logarithmic histogram of the developed image; you can change exposure by left mouse click in the right side of histogram and drag 
-								right for increase or left to decrease the exposure. The same goes for the black level but you left click in the left part of histogram.
-						</entry>
-						<entry>
-							<graphic fileref="darkroom/images/panel_histogram.png" scalefit="1" width="80%" align="center" />
-						</entry>
-					</row>
-				</tbody>
-			</tgroup>
-		</informaltable>
-	</sect2>
-</sect1>
-		
 
-&darkroom_modules;
 
-<sect1><title>Examples</title>
-&darkroom_example_crossprocessing;
-&darkroom_example_cyantone;
-&darkroom_example_blackandwhite;
-</sect1>
+<!-- Panels -->
+<xi:include href="panels/panels.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
+
+<!-- Modules -->
+<xi:include href="modules/modules.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
+
+<!-- Examples -->
+<xi:include href="examples/examples.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
 
 </chapter>

@@ -29,6 +29,7 @@
 #include "develop/develop.h"
 #include "develop/imageop.h"
 #include "control/control.h"
+#include "iop/grain.h"
 #include "gui/accelerators.h"
 #include "gui/gtk.h"
 #include <gtk/gtk.h>
@@ -43,23 +44,6 @@
 
 #define CLIP(x) ((x<0)?0.0:(x>1.0)?1.0:x)
 DT_MODULE(1)
-
-typedef enum _dt_iop_grain_channel_t
-{
-  DT_GRAIN_CHANNEL_HUE=0,
-  DT_GRAIN_CHANNEL_SATURATION,
-  DT_GRAIN_CHANNEL_LIGHTNESS,
-  DT_GRAIN_CHANNEL_RGB
-}
-_dt_iop_grain_channel_t;
-
-typedef struct dt_iop_grain_params_t
-{
-  _dt_iop_grain_channel_t channel;
-  float scale;
-  float strength;
-}
-dt_iop_grain_params_t;
 
 typedef struct dt_iop_grain_gui_data_t
 {
@@ -308,7 +292,7 @@ static double _simplex_2d_noise(double x,double y,uint32_t octaves,double persis
 {
   double f=1,a=1,total=0;
 
-  for(int o=0; o<octaves; o++)
+  for(uint32_t o=0; o<octaves; o++)
   {
     total+= (_simplex_noise(x*f/z,y*f/z,o)*a);
     f=2*o;
@@ -485,7 +469,7 @@ void init(dt_iop_module_t *module)
   module->params = malloc(sizeof(dt_iop_grain_params_t));
   module->default_params = malloc(sizeof(dt_iop_grain_params_t));
   module->default_enabled = 0;
-  module->priority = 764; // module order created by iop_dependencies.py, do not edit!
+  module->priority = 763; // module order created by iop_dependencies.py, do not edit!
   module->params_size = sizeof(dt_iop_grain_params_t);
   module->gui_data = NULL;
   dt_iop_grain_params_t tmp = (dt_iop_grain_params_t)
@@ -524,7 +508,7 @@ void gui_init(struct dt_iop_module_t *self)
   /* strength */
   g->scale2 = dt_bauhaus_slider_new_with_range(self, 0.0, 100.0, 1.0, p->strength, 2);
   dt_bauhaus_widget_set_label(g->scale2, _("strength"));
-  dt_bauhaus_slider_set_format(g->scale2,"%.0f%%");  
+  dt_bauhaus_slider_set_format(g->scale2,"%.0f%%");
   gtk_box_pack_start(GTK_BOX(self->widget), GTK_WIDGET(g->scale2), TRUE, TRUE, 0);
   g_object_set(G_OBJECT(g->scale2), "tooltip-text", _("the strength of applied grain"), (char *)NULL);
   g_signal_connect (G_OBJECT (g->scale2), "value-changed",

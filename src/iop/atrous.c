@@ -134,7 +134,7 @@ void init_key_accels(dt_iop_module_so_t *self)
 void connect_key_accels(dt_iop_module_t *self)
 {
   dt_accel_connect_slider_iop(self ,"mix",
-      ((dt_iop_atrous_gui_data_t*)self->gui_data)->mix);
+                              ((dt_iop_atrous_gui_data_t*)self->gui_data)->mix);
 }
 
 
@@ -498,7 +498,7 @@ process (struct dt_iop_module_t *self, struct dt_dev_pixelpipe_iop_t *piece, voi
     buf1 = buf3;
   }
   /* due to symmetric processing, output will be left in (float *)o */
- 
+
   for(int k=0; k<max_scale; k++) free(detail[k]);
   free(tmp);
 
@@ -528,7 +528,7 @@ process_cl (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_mem 
   {
     dt_iop_atrous_gui_data_t *g = (dt_iop_atrous_gui_data_t *)self->gui_data;
     g->num_samples = get_samples (g->sample, d, roi_in, piece);
-    dt_control_queue_redraw_widget(GTK_WIDGET(g->area));
+    // dt_control_queue_redraw_widget(GTK_WIDGET(g->area));
     // tries to acquire gdk lock and this prone to deadlock:
     // dt_control_queue_draw(GTK_WIDGET(g->area));
   }
@@ -586,6 +586,9 @@ process_cl (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_mem 
 
     err = dt_opencl_enqueue_kernel_2d(devid, gd->kernel_decompose, sizes);
     if(err != CL_SUCCESS) goto error;
+
+    // indirectly give gpu some air to breathe (and to do display related stuff)
+    dt_iop_nap(darktable.opencl->micro_nap);
   }
 
   /* now synthesize again */
@@ -616,7 +619,13 @@ process_cl (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_mem 
 
     err = dt_opencl_enqueue_kernel_2d(devid, gd->kernel_synthesize, sizes);
     if(err != CL_SUCCESS) goto error;
+
+    // indirectly give gpu some air to breathe (and to do display related stuff)
+    dt_iop_nap(darktable.opencl->micro_nap);
   }
+
+  if(!darktable.opencl->async_pixelpipe || piece->pipe->type == DT_DEV_PIXELPIPE_EXPORT)
+    dt_opencl_finish(devid);
 
   if(dev_tmp != NULL) dt_opencl_release_mem_object(dev_tmp);
   for(int k=0; k<max_scale; k++)
@@ -1304,13 +1313,13 @@ area_button_press(GtkWidget *widget, GdkEventButton *event, gpointer user_data)
   {
     // reset current curve
     dt_iop_atrous_params_t *p = (dt_iop_atrous_params_t *)self->params;
-    dt_iop_atrous_params_t *d = (dt_iop_atrous_params_t *)self->factory_params;
+    dt_iop_atrous_params_t *d = (dt_iop_atrous_params_t *)self->default_params;
     dt_iop_atrous_gui_data_t *c = (dt_iop_atrous_gui_data_t *)self->gui_data;
     reset_mix(self);
     for(int k=0; k<BANDS; k++)
     {
-        p->x[c->channel2][k] = d->x[c->channel2][k];
-        p->y[c->channel2][k] = d->y[c->channel2][k];
+      p->x[c->channel2][k] = d->x[c->channel2][k];
+      p->y[c->channel2][k] = d->y[c->channel2][k];
     }
     dt_dev_add_history_item(darktable.develop, self, TRUE);
     gtk_widget_queue_draw(self->widget);
@@ -1371,7 +1380,7 @@ mix_callback (GtkWidget *slider, gpointer user_data)
   dt_iop_module_t *self = (dt_iop_module_t *)user_data;
   if(self->dt->gui->reset) return;
   dt_iop_atrous_params_t *p = (dt_iop_atrous_params_t *)self->params;
-  dt_iop_atrous_params_t *d = (dt_iop_atrous_params_t *)self->factory_params;
+  dt_iop_atrous_params_t *d = (dt_iop_atrous_params_t *)self->default_params;
   dt_iop_atrous_gui_data_t *c = (dt_iop_atrous_gui_data_t *)self->gui_data;
   const float mix = dt_bauhaus_slider_get(slider);
   for(int ch=0; ch<atrous_none; ch++) for(int k=0; k<BANDS; k++)

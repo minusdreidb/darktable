@@ -139,7 +139,7 @@ void init_key_accels(dt_iop_module_so_t *self)
 void connect_key_accels(dt_iop_module_t *self)
 {
   dt_iop_channelmixer_gui_data_t *g =
-      (dt_iop_channelmixer_gui_data_t*)self->gui_data;
+    (dt_iop_channelmixer_gui_data_t*)self->gui_data;
 
   dt_accel_connect_slider_iop(self, "red", GTK_WIDGET(g->scale1));
   dt_accel_connect_slider_iop(self, "green", GTK_WIDGET(g->scale2));
@@ -150,7 +150,7 @@ void connect_key_accels(dt_iop_module_t *self)
 void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void *ivoid, void *ovoid, const dt_iop_roi_t *roi_in, const dt_iop_roi_t *roi_out)
 {
   const dt_iop_channelmixer_data_t *data = (dt_iop_channelmixer_data_t *)piece->data;
-  const gboolean gray_mix_mode = ( data->red[CHANNEL_GRAY] !=0.0 &&  data->green[CHANNEL_GRAY] !=0.0 &&  data->blue[CHANNEL_GRAY] !=0.0)?TRUE:FALSE;
+  const gboolean gray_mix_mode = ( data->red[CHANNEL_GRAY] !=0.0 ||  data->green[CHANNEL_GRAY] !=0.0 ||  data->blue[CHANNEL_GRAY] !=0.0)?TRUE:FALSE;
   const int ch = piece->colors;
 
 #ifdef _OPENMP
@@ -243,7 +243,7 @@ process_cl (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_mem 
   const int width = roi_in->width;
   const int height = roi_in->height;
 
-  const int gray_mix_mode = (data->red[CHANNEL_GRAY] != 0.0f && data->green[CHANNEL_GRAY] != 0.0f &&  data->blue[CHANNEL_GRAY] != 0.0f) ? TRUE : FALSE;
+  const int gray_mix_mode = (data->red[CHANNEL_GRAY] != 0.0f || data->green[CHANNEL_GRAY] != 0.0f ||  data->blue[CHANNEL_GRAY] != 0.0f) ? TRUE : FALSE;
 
   size_t sizes[] = { ROUNDUPWD(width), ROUNDUPHT(height), 1};
 
@@ -402,7 +402,7 @@ void init(dt_iop_module_t *module)
   module->params = malloc(sizeof(dt_iop_channelmixer_params_t));
   module->default_params = malloc(sizeof(dt_iop_channelmixer_params_t));
   module->default_enabled = 0;
-  module->priority = 823; // module order created by iop_dependencies.py, do not edit!
+  module->priority = 818; // module order created by iop_dependencies.py, do not edit!
   module->params_size = sizeof(dt_iop_channelmixer_params_t);
   module->gui_data = NULL;
   dt_iop_channelmixer_params_t tmp = (dt_iop_channelmixer_params_t)
@@ -433,7 +433,7 @@ void gui_init(struct dt_iop_module_t *self)
 
   /* output */
   g->combo1 = dt_bauhaus_combobox_new(self);
-  dt_bauhaus_widget_set_label(g->combo1, "destination");
+  dt_bauhaus_widget_set_label(g->combo1, _("destination"));
   dt_bauhaus_combobox_add(g->combo1,_("hue"));
   dt_bauhaus_combobox_add(g->combo1,_("saturation"));
   dt_bauhaus_combobox_add(g->combo1,_("lightness"));

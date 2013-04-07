@@ -2,13 +2,15 @@ cmake_minimum_required(VERSION 2.6)
 
 include_directories("${CMAKE_CURRENT_BINARY_DIR}/../" "${CMAKE_CURRENT_SOURCE_DIR}")
 
-set(MODULES tonecurve gamma temperature colorcorrection exposure 
+set(MODULES tonecurve gamma temperature colorcorrection exposure
 	colorin colorout clipping sharpen monochrome basecurve colorzones
 	basecurve highlights velvia vignette splittoning grain bilateral
-	profile_gamma colorcontrast lowpass vibrance 
-	channelmixer graduatednd relight zonesystem demosaic atrous tonemap 
+	profile_gamma colorcontrast lowpass vibrance
+	channelmixer graduatednd relight zonesystem demosaic atrous tonemap
   colortransfer colorize invert shadhi
-  cacorrect overexposed bloom soften clahe equalizer highpass hotpixels lowlight spots rawdenoise borders nlmeans levels flip globaltonemap)
+  cacorrect overexposed bloom soften clahe equalizer highpass
+  hotpixels lowlight spots rawdenoise borders nlmeans levels
+  flip globaltonemap bilat denoiseprofile dither)
 
 add_library(soften MODULE "soften.c")
 add_library(bloom MODULE "bloom.c")
@@ -27,6 +29,7 @@ add_library(colorin MODULE "colorin.c")
 add_library(colorout MODULE "colorout.c")
 add_library(clipping MODULE "clipping.c")
 add_library(sharpen MODULE "sharpen.c")
+add_library(dither MODULE "dither.c")
 add_library(monochrome MODULE "monochrome.c")
 add_library(basecurve MODULE "basecurve.c")
 add_library(colorzones MODULE "colorzones.c")
@@ -61,6 +64,8 @@ add_library(invert MODULE "invert.c")
 add_library(vibrance MODULE "vibrance.c")
 add_library(flip MODULE "flip.c")
 add_library(globaltonemap MODULE "globaltonemap.c")
+add_library(bilat MODULE "bilat.c")
+add_library(denoiseprofile MODULE "denoiseprofile.c")
 
 if(RSVG2_FOUND)
 	add_library(watermark MODULE "watermark.c")

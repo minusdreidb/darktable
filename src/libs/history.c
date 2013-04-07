@@ -106,7 +106,7 @@ void gui_init(dt_lib_module_t *self)
   GtkWidget *hbutton = gtk_button_new_with_label (_("compress history stack"));
   d->compress_button = hbutton;
   g_object_set (G_OBJECT (hbutton), "tooltip-text", _("create a minimal history stack which produces the same image"), (char *)NULL);
-  
+
   g_signal_connect (G_OBJECT (hbutton), "clicked", G_CALLBACK (_lib_history_compress_clicked_callback),(gpointer)0);
 
   /* add toolbar button for creating style */
@@ -148,7 +148,12 @@ static GtkWidget *_lib_history_create_button(dt_lib_module_t *self,long int num,
   if(num==-1)
     g_snprintf(numlabel, 256, "%ld - %s", num+1, label);
   else
-    g_snprintf(numlabel, 256, "%ld - %s (%s)", num+1, label, enabled?_("on"):_("off"));
+  {
+    if(enabled)
+      g_snprintf(numlabel, 256, "%ld - %s", num+1, label);
+    else
+      g_snprintf(numlabel, 256, "%ld - %s (%s)", num+1, label, _("off"));
+  }
 
   /* create toggle button */
   widget =  dtgtk_togglebutton_new_with_label (numlabel,NULL,CPF_STYLE_FLAT);
@@ -157,8 +162,8 @@ static GtkWidget *_lib_history_create_button(dt_lib_module_t *self,long int num,
 
   /* set callback when clicked */
   g_signal_connect (G_OBJECT (widget), "clicked",
-		    G_CALLBACK (_lib_history_button_clicked_callback),
-		    self);
+                    G_CALLBACK (_lib_history_button_clicked_callback),
+                    self);
 
   /* associate the history number */
   g_object_set_data(G_OBJECT(widget),"history-number",(gpointer)num+1);
@@ -181,15 +186,21 @@ static void _lib_history_change_callback(gpointer instance, gpointer user_data)
 
   /* lock history mutex */
   dt_pthread_mutex_lock(&darktable.develop->history_mutex);
-  
+
   /* iterate over history items and add them to list*/
   GList *history = g_list_first(darktable.develop->history);
+  char label[512];
   while (history)
   {
     dt_dev_history_item_t *hitem = (dt_dev_history_item_t *)(history->data);
-    
+
     /* create a history button and add to box */
-    GtkWidget *widget =_lib_history_create_button(self,num,hitem->module->name(),hitem->enabled);
+    if(hitem->module->multi_name && strcmp(hitem->module->multi_name,"0") == 0)
+      snprintf(label, 512, "%s", hitem->module->name());
+    else
+      snprintf(label, 512, "%s %s", hitem->module->name(), hitem->module->multi_name);
+    GtkWidget *widget =_lib_history_create_button(self,num,label,hitem->enabled);
+
     gtk_box_pack_start(GTK_BOX(d->history_box),widget,TRUE,TRUE,0);
     gtk_box_reorder_child(GTK_BOX(d->history_box),widget,0);
     num++;
@@ -211,12 +222,13 @@ static void _lib_history_compress_clicked_callback (GtkWidget *widget, gpointer 
   dt_dev_write_history(darktable.develop);
   sqlite3_stmt *stmt;
 
-  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), "delete from history where imgid = ?1 and num not in (select MAX(num) from history where imgid = ?1 group by operation)", -1, &stmt, NULL);
+  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), "delete from history where imgid = ?1 and num not in (select MAX(num) from history where imgid = ?1 group by operation,multi_priority)", -1, &stmt, NULL);
   DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, imgid);
   sqlite3_step(stmt);
   sqlite3_finalize(stmt);
 
   dt_dev_reload_history_items(darktable.develop);
+  dt_dev_modulegroups_set(darktable.develop, dt_dev_modulegroups_get(darktable.develop));
 }
 
 static void _lib_history_button_clicked_callback(GtkWidget *widget, gpointer user_data)
@@ -231,7 +243,7 @@ static void _lib_history_button_clicked_callback(GtkWidget *widget, gpointer use
 
   /* inactivate all toggle buttons */
   GList *children = gtk_container_get_children (GTK_CONTAINER (d->history_box));
-  for(int i=0; i<g_list_length (children); i++)
+  for(guint i=0; i<g_list_length (children); i++)
   {
     GtkToggleButton *b = GTK_TOGGLE_BUTTON( g_list_nth_data (children,i));
     if(b != GTK_TOGGLE_BUTTON(widget))
@@ -244,6 +256,7 @@ static void _lib_history_button_clicked_callback(GtkWidget *widget, gpointer use
   /* revert to given history item. */
   long int num = (long int)g_object_get_data(G_OBJECT(widget),"history-number");
   dt_dev_pop_history_items (darktable.develop, num);
+  dt_dev_modulegroups_set(darktable.develop, dt_dev_modulegroups_get(darktable.develop));
 
 }
 

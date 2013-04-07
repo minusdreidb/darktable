@@ -51,7 +51,7 @@ groups ()
 int
 flags ()
 {
-  return IOP_FLAGS_ALLOW_TILING;
+  return IOP_FLAGS_ALLOW_TILING | IOP_FLAGS_ONE_INSTANCE;
 }
 
 void init_key_accels(dt_iop_module_so_t *self)
@@ -163,6 +163,11 @@ void gui_update(struct dt_iop_module_t *self)
   dt_iop_exposure_params_t *p = (dt_iop_exposure_params_t *)module->params;
   dt_bauhaus_slider_set(g->black, p->black);
   dt_bauhaus_slider_set(g->exposure, p->exposure);
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(g->autoexp), FALSE);
+  dt_bauhaus_slider_set(g->autoexpp, 0.01);
+  gtk_widget_set_sensitive(GTK_WIDGET(g->autoexpp), FALSE);
+
+  module->request_color_pick = 0;
 }
 
 void init(dt_iop_module_t *module)
@@ -170,7 +175,7 @@ void init(dt_iop_module_t *module)
   module->params = malloc(sizeof(dt_iop_exposure_params_t));
   module->default_params = malloc(sizeof(dt_iop_exposure_params_t));
   module->default_enabled = 0;
-  module->priority = 176; // module order created by iop_dependencies.py, do not edit!
+  module->priority = 181; // module order created by iop_dependencies.py, do not edit!
   module->params_size = sizeof(dt_iop_exposure_params_t);
   module->gui_data = NULL;
   dt_iop_exposure_params_t tmp = (dt_iop_exposure_params_t)
@@ -288,16 +293,24 @@ static void
 autoexp_callback (GtkToggleButton *button, dt_iop_module_t *self)
 {
   dt_iop_exposure_gui_data_t *g = (dt_iop_exposure_gui_data_t *)self->gui_data;
-  if(darktable.gui->reset) 
+  if(darktable.gui->reset)
     return;
-  
-  self->request_color_pick = gtk_toggle_button_get_active(button);
 
-  if (self->request_color_pick)
-    dt_lib_colorpicker_set_area(darktable.lib, 0.99);
+  self->request_color_pick = (gtk_toggle_button_get_active(button) ? 1 : 0);
 
   dt_iop_request_focus(self);
+
+  if (self->request_color_pick)
+  {
+    dt_lib_colorpicker_set_area(darktable.lib, 0.99);
+    dt_dev_reprocess_all(self->dev);
+  }
+  else
+    dt_control_queue_redraw();
+
   gtk_widget_set_sensitive(GTK_WIDGET(g->autoexpp), gtk_toggle_button_get_active(button));
+
+  dt_dev_add_history_item(darktable.develop, self, TRUE);
 }
 
 static void
@@ -338,8 +351,9 @@ static gboolean
 expose (GtkWidget *widget, GdkEventExpose *event, dt_iop_module_t *self)
 {
   if(darktable.gui->reset) return FALSE;
-  if(self->picked_color_max[0] < 0) return FALSE;
   if(!self->request_color_pick) return FALSE;
+  if(self->picked_color_max[0] < 0.0f) return FALSE;
+
   dt_iop_exposure_gui_data_t *g = (dt_iop_exposure_gui_data_t *)self->gui_data;
 
   const float white = fmaxf(fmaxf(self->picked_color_max[0], self->picked_color_max[1]), self->picked_color_max[2])
@@ -357,7 +371,7 @@ void gui_init(struct dt_iop_module_t *self)
   dt_iop_exposure_gui_data_t *g = (dt_iop_exposure_gui_data_t *)self->gui_data;
   dt_iop_exposure_params_t *p = (dt_iop_exposure_params_t *)self->params;
 
-  /* register hooks with current dev so that  histogram 
+  /* register hooks with current dev so that  histogram
      can interact with this module.
    */
   darktable.develop->proxy.exposure.module = self;
@@ -377,7 +391,7 @@ void gui_init(struct dt_iop_module_t *self)
   dt_bauhaus_slider_set_format(g->black,"%.3f");
   dt_bauhaus_widget_set_label(g->black,_("black"));
 
-  g->exposure = dt_bauhaus_slider_new_with_range(self, -9.0, 9.0, .02, p->exposure, 3);
+  g->exposure = dt_bauhaus_slider_new_with_range(self, -18.0, 18.0, .02, p->exposure, 3);
   g_object_set(G_OBJECT(g->exposure), "tooltip-text", _("adjust the exposure correction"), (char *)NULL);
   dt_bauhaus_slider_set_format(g->exposure,"%.2fEV");
   dt_bauhaus_widget_set_label(g->exposure,_("exposure"));

@@ -1,6 +1,7 @@
 /*
     This file is part of darktable,
     copyright (c) 2009--2012 johannes hanika.
+    copyright (c) 2010--2012 tobias ellinghaus.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -21,12 +22,13 @@
 // just to be sure. the build system should set this for us already:
 #if defined __DragonFly__ || defined __FreeBSD__ || \
     defined __NetBSD__ || defined __OpenBSD__
-  #define _WITH_DPRINTF
+#define _WITH_DPRINTF
+#define _WITH_GETLINE
 #elif !defined _XOPEN_SOURCE
-  #define _XOPEN_SOURCE 700 // for localtime_r and dprintf
+#define _XOPEN_SOURCE 700 // for localtime_r and dprintf
 #endif
 #ifdef HAVE_CONFIG_H
-  #include "config.h"
+#include "config.h"
 #endif
 #include "common/dtpthread.h"
 #include "common/database.h"
@@ -63,7 +65,7 @@ typedef	unsigned int	u_int;
 #define omp_get_thread_num() 0
 #endif
 
-#define DT_MODULE_VERSION 6   // version of dt's module interface
+#define DT_MODULE_VERSION 8   // version of dt's module interface
 #define DT_VERSION 36         // version of dt's database tables
 #define DT_CONFIG_VERSION 34  // dt conf var version
 
@@ -127,6 +129,7 @@ struct dt_conf_t;
 struct dt_points_t;
 struct dt_imageio_t;
 struct dt_bauhaus_t;
+struct dt_undo_t;
 
 typedef enum dt_debug_thread_t
 {
@@ -141,22 +144,25 @@ typedef enum dt_debug_thread_t
   DT_DEBUG_OPENCL = 128,
   DT_DEBUG_SQL = 256,
   DT_DEBUG_MEMORY = 512,
+  DT_DEBUG_LIGHTTABLE = 1024,
+  DT_DEBUG_NAN = 2048
 }
 dt_debug_thread_t;
 
-#define DT_CPU_FLAG_SSE		1
-#define DT_CPU_FLAG_SSE2		2
-#define DT_CPU_FLAG_SSE3		4
+#define DT_CPU_FLAG_SSE    1
+#define DT_CPU_FLAG_SSE2   2
+#define DT_CPU_FLAG_SSE3   4
 
 typedef struct darktable_t
 {
   uint32_t cpu_flags;
   int32_t num_openmp_threads;
-	
+
   int32_t thumbnail_width, thumbnail_height;
   int32_t unmuted;
   GList                          *iop;
   GList                          *collection_listeners;
+  GList                          *capabilities;
   struct dt_conf_t               *conf;
   struct dt_develop_t            *develop;
   struct dt_lib_t                *lib;
@@ -168,7 +174,7 @@ typedef struct darktable_t
   struct dt_image_cache_t        *image_cache;
   struct dt_bauhaus_t            *bauhaus;
   const struct dt_database_t     *db;
-  const struct dt_fswatch_t	     *fswatch;
+  const struct dt_fswatch_t      *fswatch;
   const struct dt_pwstorage_t    *pwstorage;
   const struct dt_camctl_t       *camctl;
   const struct dt_collection_t   *collection;
@@ -177,8 +183,11 @@ typedef struct darktable_t
   struct dt_imageio_t            *imageio;
   struct dt_opencl_t             *opencl;
   struct dt_blendop_t            *blendop;
+  struct dt_dbus_t               *dbus;
+  struct dt_undo_t               *undo;
   dt_pthread_mutex_t db_insert;
   dt_pthread_mutex_t plugin_threadsafe;
+  dt_pthread_mutex_t capabilities_threadsafe;
   char *progname;
   char *datadir;
   char *plugindir;
@@ -204,6 +213,10 @@ void dt_print(dt_debug_thread_t thread, const char *msg, ...);
 void dt_gettime_t(char *datetime, time_t t);
 void dt_gettime(char *datetime);
 void *dt_alloc_align(size_t alignment, size_t size);
+int dt_capabilities_check(char *capability);
+void dt_capabilities_add(char *capability);
+void dt_capabilities_remove(char *capability);
+void dt_capabilities_cleanup();
 
 static inline double dt_get_wtime(void)
 {
@@ -215,12 +228,10 @@ static inline double dt_get_wtime(void)
 static inline void dt_get_times(dt_times_t *t)
 {
   struct rusage ru;
-  if (darktable.unmuted & DT_DEBUG_PERF)
-  {
-    getrusage(RUSAGE_SELF, &ru);
-    t->clock = dt_get_wtime();
-    t->user = ru.ru_utime.tv_sec + ru.ru_utime.tv_usec * (1.0/1000000.0);
-  }
+
+  getrusage(RUSAGE_SELF, &ru);
+  t->clock = dt_get_wtime();
+  t->user = ru.ru_utime.tv_sec + ru.ru_utime.tv_usec * (1.0/1000000.0);
 }
 
 void dt_show_times(const dt_times_t *start, const char *prefix, const char *suffix, ...);
@@ -303,10 +314,10 @@ static inline void dt_print_mem_usage()
   fclose(f);
 
   fprintf(stderr, "[memory] max address space (vmpeak): %15s"
-                  "[memory] cur address space (vmsize): %15s"
-                  "[memory] max used memory   (vmhwm ): %15s"
-                  "[memory] cur used memory   (vmrss ): %15s",
-                  vmpeak, vmsize, vmhwm, vmrss);
+          "[memory] cur address space (vmsize): %15s"
+          "[memory] max used memory   (vmhwm ): %15s"
+          "[memory] cur used memory   (vmrss ): %15s",
+          vmpeak, vmsize, vmhwm, vmrss);
 
 #elif defined(__APPLE__)
   struct task_basic_info t_info;
@@ -322,20 +333,101 @@ static inline void dt_print_mem_usage()
 
   // Report in kB, to match output of /proc on Linux.
   fprintf(stderr, "[memory] max address space (vmpeak): %15s\n"
-                  "[memory] cur address space (vmsize): %12llu kB\n"
-                  "[memory] max used memory   (vmhwm ): %15s\n"
-                  "[memory] cur used memory   (vmrss ): %12llu kB\n",
-                  "unknown", (uint64_t)t_info.virtual_size / 1024,
-                  "unknown", (uint64_t)t_info.resident_size / 1024);
+          "[memory] cur address space (vmsize): %12llu kB\n"
+          "[memory] max used memory   (vmhwm ): %15s\n"
+          "[memory] cur used memory   (vmrss ): %12llu kB\n",
+          "unknown", (uint64_t)t_info.virtual_size / 1024,
+          "unknown", (uint64_t)t_info.resident_size / 1024);
 #else
   fprintf(stderr, "dt_print_mem_usage() currently unsupported on this platform\n");
+#endif
+}
+
+static inline int
+dt_get_num_atom_cores()
+{
+#if defined(__linux__)
+  int count = 0;
+  char line[256];
+  FILE *f = fopen("/proc/cpuinfo", "r");
+  if (f)
+  {
+    while (!feof(f))
+    {
+      if (fgets(line, sizeof(line), f))
+      {
+        if (!strncmp(line, "model name", 10))
+        {
+          if (strstr(line, "Atom"))
+          {
+            count++;
+          }
+        }
+      }
+    }
+    fclose(f);
+  }
+  return count;
+#elif defined(__DragonFly__) || \
+  defined(__FreeBSD__) || \
+  defined(__NetBSD__) || \
+  defined(__OpenBSD__)
+  int ret, hw_ncpu;
+  int mib[2] = { CTL_HW, HW_MODEL };
+  char *hw_model, *index;
+  size_t length;
+
+  /* Query hw.model to get the required buffer length and allocate the
+   * buffer. */
+  ret = sysctl(mib, 2, NULL, &length, NULL, 0);
+  if (ret != 0)
+  {
+    return 0;
+  }
+
+  hw_model = (char *)malloc(length + 1);
+  if (hw_model == NULL)
+  {
+    return 0;
+  }
+
+  /* Query hw.model again, this time with the allocated buffer. */
+  ret = sysctl(mib, 2, hw_model, &length, NULL, 0);
+  if (ret != 0)
+  {
+    free(hw_model);
+    return 0;
+  }
+  hw_model[length] = '\0';
+
+  /* Check if the processor model name contains "Atom". */
+  index = strstr(hw_model, "Atom");
+  free(hw_model);
+  if (index == NULL)
+  {
+    return 0;
+  }
+
+  /* Get the number of cores, using hw.ncpu sysctl. */
+  mib[1]  = HW_NCPU;
+  hw_ncpu = 0;
+  length  = sizeof(hw_ncpu);
+  ret = sysctl(mib, 2, &hw_ncpu, &length, NULL, 0);
+  if (ret != 0)
+  {
+    return 0;
+  }
+
+  return hw_ncpu;
+#else
+  return 0;
 #endif
 }
 
 static inline size_t
 dt_get_total_memory()
 {
-#if defined(__linux__) 
+#if defined(__linux__)
   FILE *f = fopen("/proc/meminfo", "rb");
   if(!f) return 0;
   size_t mem = 0;
@@ -361,7 +453,7 @@ dt_get_total_memory()
   size_t length = sizeof(uint64_t);
   sysctl(mib, 2, (void *)&physical_memory, &length, (void *)NULL, 0);
   return physical_memory / 1024;
-#else 
+#else
   // assume 2GB until we have a better solution.
   fprintf(stderr, "Unknown memory size. Assuming 2GB\n");
   return 2097152;
@@ -369,6 +461,14 @@ dt_get_total_memory()
 }
 
 void dt_configure_defaults();
+
+// helper function which loads whatever image_to_load points to: single image files or whole directories
+int dt_load_from_string(const gchar* image_to_load, gboolean open_image_in_dr);
+
+/** define for max path/filename length */
+#define DT_MAX_FILENAME_LEN 256
+// TODO: separate into path/filename and store 256 for filename
+#define DT_MAX_PATH_LEN 1024
 
 #endif
 

@@ -22,6 +22,7 @@
 #include "control/control.h"
 #include "common/colormatrices.c"
 #include "common/debug.h"
+#include "common/srgb_tone_curve_values.h"
 #include <lcms2.h>
 
 
@@ -111,6 +112,12 @@ dt_colorspaces_get_matrix_from_profile (cmsHPROFILE prof, float *matrix, float *
   matrix[7] = green_color->Z;
   matrix[8] = blue_color->Z;
 
+  // some camera ICC profiles claim to have color locations for red, green and blue base colors defined,
+  // but in fact these are all set to zero. we catch this case here.
+  float sum = 0.0f;
+  for(int k=0; k<9; k++) sum += matrix[k];
+  if(sum == 0.0f) return 3;
+
   if(input)
   {
     // mark as linear, if they are:
@@ -164,21 +171,6 @@ dt_colorspaces_get_matrix_from_output_profile (cmsHPROFILE prof, float *matrix, 
   return dt_colorspaces_get_matrix_from_profile(prof, matrix, lutr, lutg, lutb, lutsize, 0);
 }
 
-
-static cmsToneCurve*
-build_srgb_gamma(void)
-{
-  double Parameters[5];
-
-  Parameters[0] = 2.4;
-  Parameters[1] = 1. / 1.055;
-  Parameters[2] = 0.055 / 1.055;
-  Parameters[3] = 1. / 12.92;
-  Parameters[4] = 0.04045;    // d
-
-  return cmsBuildParametricToneCurve(NULL, 4, Parameters);
-}
-
 cmsHPROFILE
 dt_colorspaces_create_lab_profile()
 {
@@ -188,88 +180,116 @@ dt_colorspaces_create_lab_profile()
 cmsHPROFILE
 dt_colorspaces_create_srgb_profile()
 {
-  cmsCIExyY       D65;
-  cmsCIExyYTRIPLE Rec709Primaries =
+  cmsHPROFILE hsRGB;
+
+  cmsCIEXYZTRIPLE Colorants =
   {
-    {0.6400, 0.3300, 1.0},
-    {0.3000, 0.6000, 1.0},
-    {0.1500, 0.0600, 1.0}
+    {0.436066, 0.222488, 0.013916},
+    {0.385147, 0.716873, 0.097076},
+    {0.143066, 0.060608, 0.714096}
   };
-  cmsToneCurve *Gamma22[3];
-  cmsHPROFILE  hsRGB;
 
-  cmsWhitePointFromTemp(&D65, 6504.0);
-  Gamma22[0] = Gamma22[1] = Gamma22[2] = build_srgb_gamma();
+  cmsCIEXYZ black = { 0, 0, 0 };
+  cmsCIEXYZ D65 = { 0.95045, 1, 1.08905 };
+  cmsToneCurve* transferFunction;
 
-  hsRGB = cmsCreateRGBProfile(&D65, &Rec709Primaries, Gamma22);
-  cmsFreeToneCurve(Gamma22[0]);
-  if (hsRGB == NULL) return NULL;
+  transferFunction = cmsBuildTabulatedToneCurve16(NULL, dt_srgb_tone_curve_values_n, dt_srgb_tone_curve_values);
+
+  hsRGB = cmsCreateProfilePlaceholder(0);
 
   cmsSetProfileVersion(hsRGB, 2.1);
+
   cmsMLU *mlu0 = cmsMLUalloc(NULL, 1);
-  cmsMLUsetASCII(mlu0, "en", "US", "(dt internal)");
+  cmsMLUsetASCII(mlu0, "en", "US", "Public Domain");
   cmsMLU *mlu1 = cmsMLUalloc(NULL, 1);
   cmsMLUsetASCII(mlu1, "en", "US", "sRGB");
   cmsMLU *mlu2 = cmsMLUalloc(NULL, 1);
-  cmsMLUsetASCII(mlu2, "en", "US", "Darktable sRGB");
-  cmsWriteTag(hsRGB, cmsSigDeviceMfgDescTag,   mlu0);
-  cmsWriteTag(hsRGB, cmsSigDeviceModelDescTag, mlu1);
+  cmsMLUsetASCII(mlu2, "en", "US", "Darktable");
+  cmsMLU *mlu3 = cmsMLUalloc(NULL, 1);
+  cmsMLUsetASCII(mlu3, "en", "US", "sRGB");
   // this will only be displayed when the embedded profile is read by for example GIMP
-  cmsWriteTag(hsRGB, cmsSigProfileDescriptionTag, mlu2);
+  cmsWriteTag(hsRGB, cmsSigCopyrightTag,          mlu0);
+  cmsWriteTag(hsRGB, cmsSigProfileDescriptionTag, mlu1);
+  cmsWriteTag(hsRGB, cmsSigDeviceMfgDescTag,      mlu2);
+  cmsWriteTag(hsRGB, cmsSigDeviceModelDescTag,    mlu3);
   cmsMLUfree(mlu0);
   cmsMLUfree(mlu1);
   cmsMLUfree(mlu2);
+  cmsMLUfree(mlu3);
+
+  cmsSetDeviceClass(hsRGB, cmsSigDisplayClass);
+  cmsSetColorSpace(hsRGB, cmsSigRgbData);
+  cmsSetPCS(hsRGB, cmsSigXYZData);
+
+  cmsWriteTag(hsRGB, cmsSigMediaWhitePointTag, &D65);
+  cmsWriteTag(hsRGB, cmsSigMediaBlackPointTag, &black);
+
+  cmsWriteTag(hsRGB, cmsSigRedColorantTag, (void*) &Colorants.Red);
+  cmsWriteTag(hsRGB, cmsSigGreenColorantTag, (void*) &Colorants.Green);
+  cmsWriteTag(hsRGB, cmsSigBlueColorantTag, (void*) &Colorants.Blue);
+
+  cmsWriteTag(hsRGB, cmsSigRedTRCTag, (void*) transferFunction);
+  cmsLinkTag(hsRGB, cmsSigGreenTRCTag, cmsSigRedTRCTag );
+  cmsLinkTag(hsRGB, cmsSigBlueTRCTag, cmsSigRedTRCTag );
 
   return hsRGB;
-}
-
-static cmsToneCurve*
-build_adobergb_gamma(void)
-{
-  // this is wrong, this should be a TRC not a table gamma
-  double Parameters[2];
-
-  Parameters[0] = 2.2;
-  Parameters[1] = 0;
-
-  return cmsBuildParametricToneCurve(NULL, 1, Parameters);
 }
 
 // Create the ICC virtual profile for adobe rgb space
 cmsHPROFILE
 dt_colorspaces_create_adobergb_profile(void)
 {
-  cmsCIExyY       D65;
-  cmsCIExyYTRIPLE AdobePrimaries =
-  {
-    {0.6400, 0.3300, 1.0},
-    {0.2100, 0.7100, 1.0},
-    {0.1500, 0.0600, 1.0}
-  };
-  cmsToneCurve *Gamma22[3];
   cmsHPROFILE  hAdobeRGB;
 
-  cmsWhitePointFromTemp(&D65, 6504.0);
-  Gamma22[0] = Gamma22[1] = Gamma22[2] = build_adobergb_gamma();
+  cmsCIEXYZTRIPLE Colorants =
+  {
+    {0.609741, 0.311111, 0.019470},
+    {0.205276, 0.625671, 0.060867},
+    {0.149185, 0.063217, 0.744568}
+  };
 
-  hAdobeRGB = cmsCreateRGBProfile(&D65, &AdobePrimaries, Gamma22);
-  cmsFreeToneCurve(Gamma22[0]);
-  if (hAdobeRGB == NULL) return NULL;
+  cmsCIEXYZ black = { 0, 0, 0 };
+  cmsCIEXYZ D65 = { 0.95045, 1, 1.08905 };
+  cmsToneCurve* transferFunction;
+
+  transferFunction = cmsBuildGamma(NULL, 2.2);
+
+  hAdobeRGB = cmsCreateProfilePlaceholder(0);
 
   cmsSetProfileVersion(hAdobeRGB, 2.1);
+
   cmsMLU *mlu0 = cmsMLUalloc(NULL, 1);
-  cmsMLUsetASCII(mlu0, "en", "US", "(dt internal)");
+  cmsMLUsetASCII(mlu0, "en", "US", "Public Domain");
   cmsMLU *mlu1 = cmsMLUalloc(NULL, 1);
-  cmsMLUsetASCII(mlu1, "en", "US", "AdobeRGB");
+  cmsMLUsetASCII(mlu1, "en", "US", "Adobe RGB (compatible)");
   cmsMLU *mlu2 = cmsMLUalloc(NULL, 1);
-  cmsMLUsetASCII(mlu2, "en", "US", "Darktable AdobeRGB");
-  cmsWriteTag(hAdobeRGB, cmsSigDeviceMfgDescTag,   mlu0);
-  cmsWriteTag(hAdobeRGB, cmsSigDeviceModelDescTag, mlu1);
+  cmsMLUsetASCII(mlu2, "en", "US", "Darktable");
+  cmsMLU *mlu3 = cmsMLUalloc(NULL, 1);
+  cmsMLUsetASCII(mlu3, "en", "US", "Adobe RGB");
   // this will only be displayed when the embedded profile is read by for example GIMP
-  cmsWriteTag(hAdobeRGB, cmsSigProfileDescriptionTag, mlu2);
+  cmsWriteTag(hAdobeRGB, cmsSigCopyrightTag,          mlu0);
+  cmsWriteTag(hAdobeRGB, cmsSigProfileDescriptionTag, mlu1);
+  cmsWriteTag(hAdobeRGB, cmsSigDeviceMfgDescTag,      mlu2);
+  cmsWriteTag(hAdobeRGB, cmsSigDeviceModelDescTag,    mlu3);
   cmsMLUfree(mlu0);
   cmsMLUfree(mlu1);
   cmsMLUfree(mlu2);
+  cmsMLUfree(mlu3);
+
+  cmsSetDeviceClass(hAdobeRGB, cmsSigDisplayClass);
+  cmsSetColorSpace(hAdobeRGB, cmsSigRgbData);
+  cmsSetPCS(hAdobeRGB, cmsSigXYZData);
+
+  cmsWriteTag(hAdobeRGB, cmsSigMediaWhitePointTag, &D65);
+  cmsWriteTag(hAdobeRGB, cmsSigMediaBlackPointTag, &black);
+
+  cmsWriteTag(hAdobeRGB, cmsSigRedColorantTag, (void*) &Colorants.Red);
+  cmsWriteTag(hAdobeRGB, cmsSigGreenColorantTag, (void*) &Colorants.Green);
+  cmsWriteTag(hAdobeRGB, cmsSigBlueColorantTag, (void*) &Colorants.Blue);
+
+  cmsWriteTag(hAdobeRGB, cmsSigRedTRCTag, (void*) transferFunction);
+  cmsLinkTag(hAdobeRGB, cmsSigGreenTRCTag, cmsSigRedTRCTag );
+  cmsLinkTag(hAdobeRGB, cmsSigBlueTRCTag, cmsSigRedTRCTag );
 
   return hAdobeRGB;
 }
@@ -698,12 +718,12 @@ dt_colorspaces_create_linear_infrared_profile(void)
 int
 dt_colorspaces_find_profile(char *filename, const int filename_len, const char *profile, const char *inout)
 {
-  char datadir[1024];
-  dt_loc_get_user_config_dir(datadir, 1024);
+  char datadir[DT_MAX_PATH_LEN];
+  dt_loc_get_user_config_dir(datadir, DT_MAX_PATH_LEN);
   snprintf(filename, filename_len, "%s/color/%s/%s", datadir, inout, profile);
   if(!g_file_test(filename, G_FILE_TEST_IS_REGULAR))
   {
-    dt_loc_get_datadir(datadir, 1024);
+    dt_loc_get_datadir(datadir, DT_MAX_PATH_LEN);
     snprintf(filename, filename_len, "%s/color/%s/%s", datadir, inout, profile);
     if(!g_file_test(filename, G_FILE_TEST_IS_REGULAR)) return 1;
   }
@@ -722,7 +742,7 @@ dt_colorspaces_create_output_profile(const int imgid)
     const dt_iop_colorout_params_t *params;
     // sqlite:
     sqlite3_stmt *stmt;
-    DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), "select op_params from history where imgid=?1 and operation='colorout'", -1, &stmt, NULL);
+    DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), "SELECT op_params FROM history WHERE imgid=?1 AND operation='colorout' ORDER BY num DESC LIMIT 1", -1, &stmt, NULL);
     DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, imgid);
     if(sqlite3_step(stmt) == SQLITE_ROW)
     {
@@ -755,13 +775,18 @@ dt_colorspaces_create_output_profile(const int imgid)
     output = dt_colorspaces_create_xyz_profile();
   else if(!strcmp(profile, "adobergb"))
     output = dt_colorspaces_create_adobergb_profile();
-  else if(!strcmp(profile, "X profile") && darktable.control->xprofile_data)
-    output = cmsOpenProfileFromMem(darktable.control->xprofile_data, darktable.control->xprofile_size);
+  else if(!strcmp(profile, "X profile"))
+  {
+    pthread_rwlock_rdlock(&darktable.control->xprofile_lock);
+    if(darktable.control->xprofile_data)
+      output = cmsOpenProfileFromMem(darktable.control->xprofile_data, darktable.control->xprofile_size);
+    pthread_rwlock_unlock(&darktable.control->xprofile_lock);
+  }
   else
   {
     // else: load file name
-    char filename[1024];
-    dt_colorspaces_find_profile(filename, 1024, profile, "out");
+    char filename[DT_MAX_PATH_LEN];
+    dt_colorspaces_find_profile(filename, DT_MAX_PATH_LEN, profile, "out");
     output = cmsOpenProfileFromFile(filename, "r");
   }
   if(!output) output = dt_colorspaces_create_srgb_profile();
@@ -936,7 +961,8 @@ static inline float hue2rgb(float m1,float m2,float hue)
 void hsl2rgb(float rgb[3],float h,float s,float l)
 {
   float m1,m2;
-  if( s==0) {
+  if( s==0)
+  {
     rgb[0]=rgb[1]=rgb[2]=l;
     return;
   }

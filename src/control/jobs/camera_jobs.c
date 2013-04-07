@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2010 - 2011 Henrik Andersson.
+    copyright (c) 2010 - 2012 Henrik Andersson.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -43,7 +43,7 @@ int32_t dt_captured_image_import_job_run(dt_job_t *job)
     dt_control_queue_redraw();
     //dt_ctl_switch_mode_to(DT_DEVELOP);
   }
- 
+
   dt_control_backgroundjobs_progress(darktable.control, jid, 1.0);
   dt_control_backgroundjobs_destroy(darktable.control, jid);
   return 0;
@@ -65,12 +65,12 @@ int32_t dt_camera_capture_job_run(dt_job_t *job)
   char message[512]= {0};
   double fraction=0;
   snprintf(message, 512, ngettext ("capturing %d image", "capturing %d images", total), total );
-  
+
   /* try to get exp program mode for nikon */
   char *expprogram = (char *)dt_camctl_camera_get_property(darktable.camctl, NULL, "expprogram");
-  
+
   /* if fail, lets try fetching mode for cannon */
-  if(!expprogram) 
+  if(!expprogram)
     expprogram = (char *)dt_camctl_camera_get_property(darktable.camctl, NULL, "autoexposuremode");
 
   /* Fetch all values for shutterspeed and initialize current value */
@@ -78,7 +78,7 @@ int32_t dt_camera_capture_job_run(dt_job_t *job)
   gconstpointer orginal_value=NULL;
   const char *cvalue = dt_camctl_camera_get_property(darktable.camctl, NULL, "shutterspeed");
   const char *value = dt_camctl_camera_property_get_first_choice(darktable.camctl, NULL, "shutterspeed");
-  
+
   /* get values for bracketing */
   if (t->brackets && expprogram && expprogram[0]=='M' && value && cvalue)
   {
@@ -106,13 +106,13 @@ int32_t dt_camera_capture_job_run(dt_job_t *job)
   const guint *jid  = dt_control_backgroundjobs_create(darktable.control, 0, message);
 
   GList *current_value = g_list_find(values,orginal_value);
-  for(int i=0; i<t->count; i++)
+  for(uint32_t i=0; i<t->count; i++)
   {
     // Delay if active
     if(t->delay)
       g_usleep(t->delay*G_USEC_PER_SEC);
 
-    for(int b=0; b<(t->brackets*2)+1; b++)
+    for(uint32_t b=0; b<(t->brackets*2)+1; b++)
     {
       // If bracket capture, lets set change shutterspeed
       if (t->brackets)
@@ -120,14 +120,14 @@ int32_t dt_camera_capture_job_run(dt_job_t *job)
         if (b == 0)
         {
           // First bracket, step down time with (steps*brackets), also check so we never set the longest shuttertime which would be bulb mode
-          for(int s=0; s<(t->steps*t->brackets); s++)
+          for(uint32_t s=0; s<(t->steps*t->brackets); s++)
             if (g_list_next(current_value) && g_list_next(g_list_next(current_value)))
               current_value = g_list_next(current_value);
         }
         else
         {
           // Step up with (steps)
-          for(int s=0; s<t->steps; s++)
+          for(uint32_t s=0; s<t->steps; s++)
             if(g_list_previous(current_value))
               current_value = g_list_previous(current_value);
         }
@@ -135,7 +135,7 @@ int32_t dt_camera_capture_job_run(dt_job_t *job)
 
       // set the time property for bracked capture
       if (t->brackets && current_value)
-        dt_camctl_camera_set_property(darktable.camctl, NULL, "shutterspeed", current_value->data);
+        dt_camctl_camera_set_property_string(darktable.camctl, NULL, "shutterspeed", current_value->data);
 
       // Capture image
       dt_camctl_camera_capture(darktable.camctl,NULL);
@@ -148,7 +148,7 @@ int32_t dt_camera_capture_job_run(dt_job_t *job)
     if (t->brackets)
     {
       current_value = g_list_find(values,orginal_value);
-      dt_camctl_camera_set_property(darktable.camctl, NULL, "shutterspeed", current_value->data);
+      dt_camctl_camera_set_property_string(darktable.camctl, NULL, "shutterspeed", current_value->data);
     }
   }
 
@@ -158,7 +158,7 @@ int32_t dt_camera_capture_job_run(dt_job_t *job)
   // free values
   if(values)
   {
-    for(int i=0; i<g_list_length(values); i++)
+    for(guint i=0; i<g_list_length(values); i++)
       g_free(g_list_nth_data(values,i));
 
     g_list_free(values);
@@ -287,11 +287,12 @@ void _camera_image_downloaded(const dt_camera_t *camera,const char *filename,voi
 {
   // Import downloaded image to import filmroll
   dt_camera_import_t *t = (dt_camera_import_t *)data;
-  dt_film_image_import(t->film,filename, FALSE);
+  dt_image_import(t->film->id, filename, FALSE);
+  dt_control_queue_redraw_center();
   dt_control_log(_("%d/%d imported to %s"), t->import_count+1,g_list_length(t->images), g_path_get_basename(filename));
 
   t->fraction+=1.0/g_list_length(t->images);
-  
+
   dt_control_backgroundjobs_progress(darktable.control, t->bgj, t->fraction );
 
   if( dt_conf_get_bool("plugins/capture/camera/import/backup/enable") == TRUE )
@@ -322,25 +323,53 @@ const char *_camera_import_request_image_filename(const dt_camera_t *camera,cons
   g_free(t->path);
   t->path = fixed_path;
   dt_variables_expand( t->vp, t->path, FALSE );
-  const gchar *storage=dt_variables_get_result(t->vp);
+  gchar *storage = dt_variables_get_result(t->vp);
 
   dt_variables_expand( t->vp, t->filename, TRUE );
-  const gchar *file = dt_variables_get_result(t->vp);
+  gchar *file = dt_variables_get_result(t->vp);
 
   // Start check if file exist if it does, increase sequence and check again til we know that file doesnt exists..
-  gchar *fullfile=g_build_path(G_DIR_SEPARATOR_S,storage,file,(char *)NULL);
+  gchar *prev_filename;
+  gchar *fullfile;
+  prev_filename = fullfile = g_build_path(G_DIR_SEPARATOR_S,
+					  storage, file,
+					  (char *)NULL);
+
   if( g_file_test(fullfile, G_FILE_TEST_EXISTS) == TRUE )
   {
     do
     {
-      g_free(fullfile);
       dt_variables_expand( t->vp, t->filename, TRUE );
+      g_free(file);
       file = dt_variables_get_result(t->vp);
-      fullfile=g_build_path(G_DIR_SEPARATOR_S,storage,file,(char *)NULL);
+      fullfile = g_build_path(G_DIR_SEPARATOR_S, storage, file, (char *)NULL);
+
+      // if we expanded to same filename the variables are wrong and ${SEQUENCE}
+      // is probably missing...
+      if (strcmp(prev_filename, fullfile) == 0)
+      {
+	if (prev_filename != fullfile)
+	  g_free(prev_filename);
+
+	g_free(fullfile);
+	g_free(storage);
+
+	dt_control_log(_("Couldn't expand to a uniq filename for import, please check your import settings."));
+
+	return NULL;
+      }
+
+      g_free(prev_filename);
+      prev_filename = fullfile;
     }
     while( g_file_test(fullfile, G_FILE_TEST_EXISTS) == TRUE);
   }
 
+  if (prev_filename != fullfile)
+    g_free(prev_filename);
+
+  g_free(fullfile);
+  g_free(storage);
   return file;
 }
 

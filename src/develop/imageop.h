@@ -53,14 +53,26 @@ struct dt_develop_tiling_t;
 #define	IOP_GROUP_ALL (IOP_GROUP_BASIC|IOP_GROUP_COLOR|IOP_GROUP_CORRECT|IOP_GROUP_EFFECT)
 
 /** Flag for the iop module to be enabled/included by default when creating a style */
-#define	IOP_FLAGS_INCLUDE_IN_STYLES	1
-#define	IOP_FLAGS_SUPPORTS_BLENDING	2			// Does provide blending modes
-#define	IOP_FLAGS_DEPRECATED	        4
-#define IOP_FLAGS_BLEND_ONLY_LIGHTNESS	8			// Does only blend with L-channel in Lab space. Keeps a, b of original image.
+#define IOP_FLAGS_INCLUDE_IN_STYLES     1
+#define IOP_FLAGS_SUPPORTS_BLENDING     2                       // Does provide blending modes
+#define IOP_FLAGS_DEPRECATED            4
+#define IOP_FLAGS_BLEND_ONLY_LIGHTNESS  8                       // Does only blend with L-channel in Lab space. Keeps a, b of original image.
 #define IOP_FLAGS_ALLOW_TILING         16                       // Does allow tile-wise processing (valid for CPU and GPU processing)
 #define IOP_FLAGS_HIDDEN               32                       // Hide the iop from userinterface
 #define IOP_FLAGS_TILING_FULL_ROI      64                       // Tiling code has to expect arbitrary roi's for this module (incl. flipping, mirroring etc.)
+#define IOP_FLAGS_ONE_INSTANCE        128                       // The module doesn't support multiple instances
+#define IOP_FLAGS_PREVIEW_NON_OPENCL  256                       // Preview pixelpipe of this module must not run on GPU but always on CPU
+#define IOP_FLAGS_NO_HISTORY_STACK    512                       // This iop will never show up in the history stack
+/** status of a module*/
+typedef enum dt_iop_module_state_t
+{
+  dt_iop_state_HIDDEN = 0, // keep first
+  dt_iop_state_ACTIVE,
+  dt_iop_state_FAVORITE,
+  dt_iop_state_LAST
 
+}
+dt_iop_module_state_t;
 typedef struct dt_iop_params_t
 {
   int keep;
@@ -141,6 +153,9 @@ typedef struct dt_iop_module_so_t
   void (*process_tiling)  (struct dt_iop_module_t *self, struct dt_dev_pixelpipe_iop_t *piece, void *i, void *o, const struct dt_iop_roi_t *roi_in, const struct dt_iop_roi_t *roi_out, const int bpp);
   int  (*process_cl)      (struct dt_iop_module_t *self, struct dt_dev_pixelpipe_iop_t *piece, void *i, void *o, const struct dt_iop_roi_t *roi_in, const struct dt_iop_roi_t *roi_out);
   int  (*process_tiling_cl)      (struct dt_iop_module_t *self, struct dt_dev_pixelpipe_iop_t *piece, void *i, void *o, const struct dt_iop_roi_t *roi_in, const struct dt_iop_roi_t *roi_out, const int bpp);
+
+  int (*distort_transform) (struct dt_iop_module_t *self, struct dt_dev_pixelpipe_iop_t *piece, float *points, int points_count);
+  int (*distort_backtransform) (struct dt_iop_module_t *self, struct dt_dev_pixelpipe_iop_t *piece, float *points, int points_count);
 }
 dt_iop_module_so_t;
 
@@ -158,8 +173,12 @@ typedef struct dt_iop_module_t
   int32_t hide_enable_button;
   /** set to 1 if you want an input color picked during next eval. gui mode only. */
   int32_t request_color_pick;
+  /** set to 1 if you want an input histogram generated during next eval. gui mode only. */
+  int32_t request_histogram;
   /** set to 1 if you want the mask to be transfered into alpha channel during next eval. gui mode only. */
   int32_t request_mask_display;
+  /** set to 1 if you want the blendif mask to be suppressed in the module in focus. gui mode only. */
+  int32_t suppress_mask;
   /** bounding box in which the mean color is requested. */
   float color_picker_box[4];
   /** single point to pick if in point mode */
@@ -168,14 +187,18 @@ typedef struct dt_iop_module_t
   float picked_color[3], picked_color_min[3], picked_color_max[3];
   /** place to store the picked color of module output (before blending). */
   float picked_output_color[3], picked_output_color_min[3], picked_output_color_max[3];
+  /** pointer to pre-module histogram data; if available: 64 bins with 4 channels each */
+  float *histogram;
+  /** maximum levels in histogram, one per channel */
+  float histogram_max[4];
   /** reference for dlopened libs. */
   darktable_t *dt;
   /** the module is used in this develop module. */
   struct dt_develop_t *dev;
   /** non zero if this node should be processed. */
-  int32_t enabled, default_enabled, factory_enabled;
+  int32_t enabled, default_enabled;
   /** parameters for the operation. will be replaced by history revert. */
-  dt_iop_params_t *params, *default_params, *factory_params;
+  dt_iop_params_t *params, *default_params;
   /** size of individual params struct. */
   int32_t params_size;
   /** parameters needed if a gui is attached. will be NULL if in export/batch mode. */
@@ -194,7 +217,7 @@ typedef struct dt_iop_module_t
   GtkWidget *header;
 
   /** button used to show/hide this module in the plugin list. */
-  GtkWidget *showhide;
+  dt_iop_module_state_t state;
   /** expander containing the widget and flag to store expanded state */
   GtkWidget *expander;
   gboolean expanded;
@@ -211,6 +234,14 @@ typedef struct dt_iop_module_t
   /** the correspoinding SO object */
   dt_iop_module_so_t *so;
 
+  /** multi-instances things */
+  int multi_priority; //user may change this
+  char multi_name[128]; //user may change this name
+  gboolean multi_show_close;
+  gboolean multi_show_up;
+  gboolean multi_show_down;
+  GtkWidget *duplicate_button;
+  GtkWidget *multimenu_button;
 
   /** version of the parameters in the database. */
   int (*version)          ();
@@ -282,6 +313,14 @@ typedef struct dt_iop_module_t
   /** a tiling variant of process_cl(). */
   int (*process_tiling_cl)  (struct dt_iop_module_t *self, struct dt_dev_pixelpipe_iop_t *piece, void *i, void *o, const struct dt_iop_roi_t *roi_in, const struct dt_iop_roi_t *roi_out, const int bpp);
 
+  /** this functions are used for distrot iop
+   * points is an array of float {x1,y1,x2,y2,...}
+   * size is 2*points_count */
+  /** points before the iop is applied => point after processed */
+  int (*distort_transform) (struct dt_iop_module_t *self, struct dt_dev_pixelpipe_iop_t *piece, float *points, int points_count);
+  /** reverse points after the iop is applied => point before process */
+  int (*distort_backtransform) (struct dt_iop_module_t *self, struct dt_dev_pixelpipe_iop_t *piece, float *points, int points_count);
+
   /** Key accelerator registration callbacks */
   void (*connect_key_accels)(struct dt_iop_module_t *self);
   void (*original_connect_key_accels)(struct dt_iop_module_t *self);
@@ -295,12 +334,16 @@ void dt_iop_load_modules_so();
 void dt_iop_unload_modules_so();
 /** returns a list of instances referencing stuff loaded in load_modules_so. */
 GList *dt_iop_load_modules(struct dt_develop_t *dev);
+int dt_iop_load_module(dt_iop_module_t *module, dt_iop_module_so_t *module_so, struct dt_develop_t *dev);
+gint sort_plugins(gconstpointer a, gconstpointer b);
 /** calls module->cleanup and closes the dl connection. */
 void dt_iop_cleanup_module(dt_iop_module_t *module);
 /** initialize pipe. */
 void dt_iop_init_pipe(struct dt_iop_module_t *module, struct dt_dev_pixelpipe_t *pipe, struct dt_dev_pixelpipe_iop_t *piece);
 /** checks if iop do have an ui */
 gboolean dt_iop_is_hidden(dt_iop_module_t *module);
+/** cleans up gui of module and of blendops */
+void dt_iop_gui_cleanup_module(dt_iop_module_t *module);
 /** updates the gui params and the enabled switch. */
 void dt_iop_gui_update(dt_iop_module_t *module);
 /** reset the ui to its defaults */
@@ -309,6 +352,8 @@ void dt_iop_gui_reset(dt_iop_module_t *module);
 void dt_iop_gui_set_expanded(dt_iop_module_t *module, gboolean expanded);
 /** refresh iop according to set expanded state */
 void dt_iop_gui_update_expanded(dt_iop_module_t *module);
+/** change module state */
+void dt_iop_gui_set_state(dt_iop_module_t *module,dt_iop_module_state_t state);
 
 /** commits params and updates piece hash. */
 void dt_iop_commit_params(dt_iop_module_t *module, struct dt_iop_params_t *params, struct dt_develop_blend_params_t * blendop_params, struct dt_dev_pixelpipe_t *pipe, struct dt_dev_pixelpipe_iop_t *piece);
@@ -325,12 +370,14 @@ void dt_iop_request_focus(dt_iop_module_t *module);
 void dt_iop_load_default_params(dt_iop_module_t *module);
 /** reloads certain gui/param defaults when the image was switched. */
 void dt_iop_reload_defaults(dt_iop_module_t *module);
+/** fills the given params blob with the result of per-iso interpolation, searching the matching presets. returns 1 on failure. */
+int  dt_iop_load_preset_interpolated_iso(dt_iop_module_t *module, const dt_image_t *cimg, void *output_params, float *output_iso1, float *output_iso2);
 
 /** let plugins have breakpoints: */
 int dt_iop_breakpoint(struct dt_develop_t *dev, struct dt_dev_pixelpipe_t *pipe);
 
 /** allow plugins to relinquish CPU and go to sleep for some time */
-void dt_iop_nap(uint32_t usec);
+void dt_iop_nap(int32_t usec);
 
 /** colorspace enums */
 typedef enum dt_iop_colorspace_type_t
@@ -353,24 +400,24 @@ void dt_iop_clip_and_zoom(float *out, const float *const in, const struct dt_iop
 /** clip and zoom mosaiced image without demosaicing it uint16_t -> float4 */
 void
 dt_iop_clip_and_zoom_demosaic_half_size(
-    float *out,
-    const uint16_t *const in,
-    const struct dt_iop_roi_t *const roi_out,
-    const struct dt_iop_roi_t *const roi_in,
-    const int32_t out_stride,
-    const int32_t in_stride,
-    const uint32_t filters);
+  float *out,
+  const uint16_t *const in,
+  const struct dt_iop_roi_t *const roi_out,
+  const struct dt_iop_roi_t *const roi_in,
+  const int32_t out_stride,
+  const int32_t in_stride,
+  const uint32_t filters);
 
 void
 dt_iop_clip_and_zoom_demosaic_half_size_f(
-    float *out,
-    const float *const in,
-    const struct dt_iop_roi_t *const roi_out,
-    const struct dt_iop_roi_t *const roi_in,
-    const int32_t out_stride,
-    const int32_t in_stride,
-    const uint32_t filters,
-    const float clip);
+  float *out,
+  const float *const in,
+  const struct dt_iop_roi_t *const roi_out,
+  const struct dt_iop_roi_t *const roi_in,
+  const int32_t out_stride,
+  const int32_t in_stride,
+  const uint32_t filters,
+  const float clip);
 
 /** as dt_iop_clip_and_zoom, but for rgba 8-bit channels. */
 void dt_iop_clip_and_zoom_8(const uint8_t *i, int32_t ix, int32_t iy, int32_t iw, int32_t ih, int32_t ibw, int32_t ibh,
@@ -411,7 +458,7 @@ static inline void dt_iop_estimate_exp(const float *const x, const float *const 
   // g = log(y/y0)/log(x/x0)
   //
   // average that over the course of the other samples:
-  for(int k=0;k<num-1;k++)
+  for(int k=0; k<num-1; k++)
   {
     const float yy = y[k]/y0, xx = x[k]/x0;
     if(yy > 0.0f && xx > 0.0f)

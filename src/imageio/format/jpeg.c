@@ -22,6 +22,7 @@
 #endif
 #include "common/darktable.h"
 #include "common/imageio_module.h"
+#include "common/imageio.h"
 #include "common/colorspaces.h"
 #include "control/conf.h"
 #include "dtgtk/slider.h"
@@ -42,6 +43,7 @@ typedef struct dt_imageio_jpeg_t
 {
   int max_width, max_height;
   int width, height;
+  char style[128];
   int quality;
   struct jpeg_source_mgr src;
   struct jpeg_destination_mgr dest;
@@ -157,7 +159,7 @@ int decompress(dt_imageio_jpeg_t *jpg, uint8_t *out)
   while(jpg->dinfo.output_scanline < jpg->dinfo.image_height)
   {
     if(jpeg_read_scanlines(&(jpg->dinfo), row_pointer, 1) != 1) return 1;
-    for(int i=0; i<jpg->dinfo.image_width; i++) for(int k=0; k<3; k++)
+    for(JDIMENSION i=0; i<jpg->dinfo.image_width; i++) for(int k=0; k<3; k++)
         tmp[4*i+k] = row_pointer[0][3*i+k];
     tmp += 4*jpg->width;
   }
@@ -562,10 +564,10 @@ int read_image (dt_imageio_jpeg_t *jpg, uint8_t *out)
   {
     if(jpeg_read_scanlines(&(jpg->dinfo), row_pointer, 1) != 1) return 1;
     if(jpg->dinfo.num_components < 3)
-      for(int i=0; i<jpg->dinfo.image_width; i++) for(int k=0; k<3; k++)
+      for(JDIMENSION i=0; i<jpg->dinfo.image_width; i++) for(int k=0; k<3; k++)
           tmp[4*i+k] = row_pointer[0][jpg->dinfo.num_components*i+0];
     else
-      for(int i=0; i<jpg->dinfo.image_width; i++) for(int k=0; k<3; k++)
+      for(JDIMENSION i=0; i<jpg->dinfo.image_width; i++) for(int k=0; k<3; k++)
           tmp[4*i+k] = row_pointer[0][3*i+k];
     tmp += 4*jpg->width;
   }
@@ -580,8 +582,9 @@ void*
 get_params(dt_imageio_module_format_t *self, int *size)
 {
   // adjust this if more params are stored (subsampling etc)
-  *size = sizeof(int)*5;
+  *size = sizeof(dt_imageio_module_data_t) + sizeof(int);
   dt_imageio_jpeg_t *d = (dt_imageio_jpeg_t *)malloc(sizeof(dt_imageio_jpeg_t));
+  memset(d,0,sizeof(dt_imageio_jpeg_t));
   d->quality = dt_conf_get_int("plugins/imageio/format/jpeg/quality");
   if(d->quality <= 0 || d->quality > 100) d->quality = 100;
   return d;
@@ -596,7 +599,7 @@ free_params(dt_imageio_module_format_t *self, void *params)
 int
 set_params(dt_imageio_module_format_t *self, void *params, int size)
 {
-  if(size != sizeof(int)*5) return 1;
+  if(size != sizeof(dt_imageio_module_data_t) + sizeof(int)) return 1;
   dt_imageio_jpeg_t *d = (dt_imageio_jpeg_t *)params;
   dt_imageio_jpeg_gui_data_t *g = (dt_imageio_jpeg_gui_data_t *)self->gui_data;
   dtgtk_slider_set_value(g->quality, d->quality);
@@ -609,6 +612,12 @@ bpp(dt_imageio_module_data_t *p)
   return 8;
 }
 
+int
+levels(dt_imageio_module_data_t *p)
+{
+  return IMAGEIO_RGB | IMAGEIO_INT8;
+}
+
 const char*
 mime(dt_imageio_module_data_t *data)
 {
@@ -619,6 +628,12 @@ const char*
 extension(dt_imageio_module_data_t *data)
 {
   return "jpg";
+}
+
+int
+flags(dt_imageio_module_data_t *data)
+{
+  return FORMAT_FLAGS_SUPPORT_XMP;
 }
 
 void init(dt_imageio_module_format_t *self) {}

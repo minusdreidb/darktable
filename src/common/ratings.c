@@ -24,6 +24,16 @@
 #include "gui/gtk.h"
 
 
+void dt_ratings_apply_to_image (int imgid, int rating)
+{
+  const dt_image_t *cimg = dt_image_cache_read_get(darktable.image_cache, imgid);
+  dt_image_t *image = dt_image_cache_write_get(darktable.image_cache, cimg);
+  image->flags = (image->flags & ~0x7) | (0x7 & rating);
+  // synch through:
+  dt_image_cache_write_release(darktable.image_cache, image, DT_IMAGE_CACHE_SAFE);
+  dt_image_cache_read_release(darktable.image_cache, image);
+ }
+
 void dt_ratings_apply_to_selection (int rating)
 {
   uint32_t count = dt_collection_get_selected_count(darktable.collection);
@@ -31,11 +41,11 @@ void dt_ratings_apply_to_selection (int rating)
   {
     dt_control_log(ngettext("applying rating %d to %d image", "applying rating %d to %d images", count), rating, count);
 #if 0 // not updating cache
-    gchar query[1024]={0};
+    gchar query[1024]= {0};
     g_snprintf(query,1024,
-	       "update images set flags=(images.flags & ~7) | (7 & %d) where id in (select imgid from selected_images)",
-	       rating
-	       );
+               "update images set flags=(images.flags & ~7) | (7 & %d) where id in (select imgid from selected_images)",
+               rating
+              );
     DT_DEBUG_SQLITE3_EXEC(dt_database_get(darktable.db), query, NULL, NULL, NULL);
 #endif
 
@@ -44,17 +54,13 @@ void dt_ratings_apply_to_selection (int rating)
     DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), "select imgid from selected_images", -1, &stmt, NULL);
     while(sqlite3_step(stmt) == SQLITE_ROW)
     {
-      const dt_image_t *cimg = dt_image_cache_read_get(darktable.image_cache, sqlite3_column_int(stmt, 0));
-      dt_image_t *image = dt_image_cache_write_get(darktable.image_cache, cimg);
-      image->flags = (image->flags & ~0x7) | (0x7 & rating);
-      // synch through:
-      dt_image_cache_write_release(darktable.image_cache, image, DT_IMAGE_CACHE_SAFE);
-      dt_image_cache_read_release(darktable.image_cache, image);
+      dt_ratings_apply_to_image(sqlite3_column_int(stmt, 0), rating);
     }
     sqlite3_finalize(stmt);
 
     /* redraw view */
-    dt_control_queue_redraw_center();
+    /* dt_control_queue_redraw_center() */
+    /* needs to be called in the caller function */
   }
   else
     dt_control_log(_("no images selected to apply rating"));

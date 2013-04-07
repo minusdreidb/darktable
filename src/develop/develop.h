@@ -36,20 +36,31 @@ typedef struct dt_dev_history_item_t
   int32_t enabled;                // switched respective module on/off
   struct dt_iop_params_t *params; // parameters for this operation
   struct dt_develop_blend_params_t *blend_params;
+  int multi_priority;
+  char multi_name[128];
 }
 dt_dev_history_item_t;
 
+typedef enum dt_dev_overexposed_colorscheme_t
+{
+  DT_DEV_OVEREXPOSED_BLACKWHITE = 0,
+  DT_DEV_OVEREXPOSED_REDBLUE = 1,
+  DT_DEV_OVEREXPOSED_PURPLEGREEN = 2
+}
+dt_dev_overexposed_colorscheme_t;
+
 struct dt_dev_pixelpipe_t;
-struct dt_iop_module_t;
 typedef struct dt_develop_t
 {
   int32_t gui_attached; // != 0 if the gui should be notified of changes in hist stack and modules should be gui_init'ed.
   int32_t gui_leaving;  // set if everything is scheduled to shut down.
   int32_t gui_synch; // set by the render threads if gui_update should be called in the modules.
-  int32_t image_loading, image_dirty;
+  int32_t image_loading, image_dirty, first_load;
   int32_t image_force_reload;
   int32_t preview_loading, preview_dirty, preview_input_changed;
   uint32_t timestamp;
+  uint32_t average_delay;
+  uint32_t preview_average_delay;
   struct dt_iop_module_t *gui_module; // this module claims gui expose/event callbacks.
   float preview_downsampling; // < 1.0: optionally downsample preview
 
@@ -59,6 +70,7 @@ typedef struct dt_develop_t
 
   // image processing pipeline with caching
   struct dt_dev_pixelpipe_t *pipe, *preview_pipe;
+  dt_pthread_mutex_t pipe_mutex, preview_pipe_mutex; // these are locked while the pipes are still in use
 
   // image under consideration, which
   // is copied each time an image is changed. this means we have some information
@@ -85,7 +97,7 @@ typedef struct dt_develop_t
   /* proxy for communication between plugins and develop/darkroom */
   struct
   {
-    // exposure plugin hooks, used by histogram dragging functions 
+    // exposure plugin hooks, used by histogram dragging functions
     struct
     {
       struct dt_iop_module_t *module;
@@ -111,7 +123,7 @@ typedef struct dt_develop_t
     }
     modulegroups;
 
-    // snapshots plugin hooks 
+    // snapshots plugin hooks
     struct
     {
       // this flag is set by snapshot plugin to signal that expose of darkroom
@@ -123,6 +135,20 @@ typedef struct dt_develop_t
 
   }
   proxy;
+
+  // for the overexposure indicator
+  struct
+  {
+    guint timeout;
+    gulong destroy_signal_handler;
+    GtkWidget *floating_window, *button; // yes, having gtk stuff in here is ugly. live with it.
+
+    gboolean enabled;
+    dt_dev_overexposed_colorscheme_t colorscheme;
+    float lower;
+    float upper;
+  }
+  overexposed;
 }
 dt_develop_t;
 
@@ -151,7 +177,8 @@ void dt_dev_invalidate_all(dt_develop_t *dev);
 void dt_dev_set_histogram(dt_develop_t *dev);
 void dt_dev_set_histogram_pre(dt_develop_t *dev);
 void dt_dev_get_history_item_label(dt_dev_history_item_t *hist, char *label, const int cnt);
-
+void dt_dev_reprocess_all(dt_develop_t *dev);
+void dt_dev_reprocess_center(dt_develop_t *dev);
 
 void dt_dev_get_processed_size(const dt_develop_t *dev, int *procw, int *proch);
 void dt_dev_check_zoom_bounds(dt_develop_t *dev, float *zoom_x, float *zoom_y, dt_dev_zoom_t zoom, int closeup, float *boxw, float *boxh);
@@ -162,8 +189,8 @@ void dt_dev_get_pointer_zoom_pos(dt_develop_t *dev, const float px, const float 
 void dt_dev_configure (dt_develop_t *dev, int wd, int ht);
 void dt_dev_invalidate_from_gui (dt_develop_t *dev);
 
-/* 
- * exposure plugin hook, set the white level 
+/*
+ * exposure plugin hook, set the white level
  */
 
 /** check if exposure iop hooks are available */
@@ -195,6 +222,34 @@ gboolean dt_dev_modulegroups_test(dt_develop_t *dev, uint32_t group, uint32_t io
 
 /** request snapshot */
 void dt_dev_snapshot_request(dt_develop_t *dev, const char *filename);
+
+/** update gliding average for pixelpipe delay */
+void dt_dev_average_delay_update(const dt_times_t *start, uint32_t *average_delay);
+
+/*
+ * multi instances
+ */
+/** duplicate a existant module */
+struct dt_iop_module_t *dt_dev_module_duplicate(dt_develop_t *dev, struct dt_iop_module_t *base, int priority);
+/** remove an existant module */
+void dt_dev_module_remove(dt_develop_t *dev, struct dt_iop_module_t *module);
+/** update "show" values of the multi instance part (show_move, show_delete, ...) */
+void dt_dev_module_update_multishow(dt_develop_t *dev, struct dt_iop_module_t *module);
+/** same, but for all modules */
+void dt_dev_modules_update_multishow(dt_develop_t *dev);
+
+/*
+ * distort functions
+ */
+ /** apply all transforms to the specified points (in preview pipe space) */
+int dt_dev_distort_transform(dt_develop_t *dev, float *points, int points_count);
+ /** reverse apply all transforms to the specified points (in preview pipe space) */
+int dt_dev_distort_backtransform(dt_develop_t *dev, float *points, int points_count);
+ /** same fct, but we can specify iop with priority between pmin and pmax */
+int dt_dev_distort_transform_plus(dt_develop_t *dev, struct dt_dev_pixelpipe_t *pipe, int pmin, int pmax, float *points, int points_count);
+int dt_dev_distort_backtransform_plus(dt_develop_t *dev, struct dt_dev_pixelpipe_t *pipe, int pmin, int pmax, float *points, int points_count);
+/** get the iop_pixelpipe instance corresponding to the iop in the given pipe */
+struct dt_dev_pixelpipe_iop_t *dt_dev_distort_get_iop_pipe(dt_develop_t *dev, struct dt_dev_pixelpipe_t *pipe, struct dt_iop_module_t *module);
 
 #endif
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh

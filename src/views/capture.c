@@ -98,6 +98,8 @@ static uint32_t _capture_view_get_film_id(const dt_view_t *view);
 static void _capture_view_set_jobcode(const dt_view_t *view, const char *name);
 static const char *_capture_view_get_jobcode(const dt_view_t *view);
 static uint32_t _capture_view_get_selected_imgid(const dt_view_t *view);
+static void _capture_view_set_session_namepattern(const dt_view_t *view, const char *namepattern);
+static gboolean _capture_view_check_namepattern(const dt_view_t *view);
 
 const char *name(dt_view_t *self)
 {
@@ -111,8 +113,7 @@ uint32_t view(dt_view_t *self)
 
 static void _view_capture_filmstrip_activate_callback(gpointer instance,gpointer user_data)
 {
-  int32_t imgid = -1;
-  if ((imgid=dt_view_filmstrip_get_activated_imgid(darktable.view_manager)) >= 0)
+  if (dt_view_filmstrip_get_activated_imgid(darktable.view_manager) >= 0)
     dt_control_queue_redraw_center();
 }
 
@@ -128,11 +129,11 @@ void capture_view_switch_key_accel(void *p)
 }
 
 gboolean film_strip_key_accel(GtkAccelGroup *accel_group,
-                          GObject *acceleratable,
-                          guint keyval, GdkModifierType modifier,
-                          gpointer data)
+                              GObject *acceleratable,
+                              guint keyval, GdkModifierType modifier,
+                              gpointer data)
 {
-  dt_lib_module_t *m = darktable.view_manager->proxy.filmstrip.module; 
+  dt_lib_module_t *m = darktable.view_manager->proxy.filmstrip.module;
   gboolean vs = dt_lib_is_visible(m);
   dt_lib_set_visible(m,!vs);
   return TRUE;
@@ -167,6 +168,8 @@ void init(dt_view_t *self)
   darktable.view_manager->proxy.tethering.get_job_code = _capture_view_get_jobcode;
   darktable.view_manager->proxy.tethering.set_job_code = _capture_view_set_jobcode;
   darktable.view_manager->proxy.tethering.get_selected_imgid = _capture_view_get_selected_imgid;
+  darktable.view_manager->proxy.tethering.set_session_namepattern = _capture_view_set_session_namepattern;
+  darktable.view_manager->proxy.tethering.check_namepattern = _capture_view_check_namepattern;
 
 }
 
@@ -220,7 +223,7 @@ const gchar *_capture_view_get_session_filename(const dt_view_t *view,const char
 
   // Start check if file exist if it does, increase sequence and check again til we know that file doesnt exists..
   gchar *fullfile = g_build_path(G_DIR_SEPARATOR_S,storage,file,(char *)NULL);
-  
+
   if( g_file_test(fullfile, G_FILE_TEST_EXISTS) == TRUE )
   {
     do
@@ -255,7 +258,8 @@ void _capture_view_set_jobcode(const dt_view_t *view, const char *name)
   }
 
   /* lets initialize a new filmroll for the capture... */
-  cv->film=(dt_film_t*)g_malloc(sizeof(dt_film_t));
+  cv->film = (dt_film_t*)malloc(sizeof(dt_film_t));
+  if(!cv->film) return;
   dt_film_init(cv->film);
 
   int current_filmroll = dt_conf_get_int("plugins/capture/current_filmroll");
@@ -297,7 +301,11 @@ void _capture_view_set_jobcode(const dt_view_t *view, const char *name)
     if( g_mkdir_with_parents(cv->film->dirname,0755) == -1 )
     {
       dt_control_log(_("failed to create session path %s."), cv->film->dirname);
-      g_free( cv->film );
+      if(cv->film)
+      {
+        free( cv->film );
+        cv->film = NULL;
+      }
       return;
     }
 
@@ -322,6 +330,24 @@ const char *_capture_view_get_jobcode(const dt_view_t *view)
   dt_capture_t *cv=(dt_capture_t *)view->data;
 
   return cv->jobcode;
+}
+
+void _capture_view_set_session_namepattern(const dt_view_t *view, const char *namepattern)
+{
+  g_assert( view != NULL );
+  dt_capture_t *cv=(dt_capture_t *)view->data;
+
+  g_free(cv->filenamepattern);
+
+  cv->filenamepattern = g_strdup(namepattern);
+}
+
+gboolean _capture_view_check_namepattern(const dt_view_t *view)
+{
+  g_assert( view != NULL );
+  dt_capture_t *cv=(dt_capture_t *)view->data;
+
+  return (strstr(cv->filenamepattern, "$(SEQUENCE)") != NULL);
 }
 
 void configure(dt_view_t *self, int wd, int ht)
@@ -372,9 +398,9 @@ void _expose_tethered_mode(dt_view_t *self, cairo_t *cr, int32_t width, int32_t 
   else if( lib->image_id >= 0 )  // First of all draw image if availble
   {
     cairo_translate(cr,MARGIN, MARGIN);
-    dt_view_image_expose(&(lib->image_over), lib->image_id, 
-              cr, width-(MARGIN*2.0f), height-(MARGIN*2.0f), 1, 
-              pointerx, pointery);
+    dt_view_image_expose(&(lib->image_over), lib->image_id,
+                         cr, width-(MARGIN*2.0f), height-(MARGIN*2.0f), 1,
+                         pointerx, pointery, FALSE);
   }
 }
 
@@ -448,15 +474,15 @@ void enter(dt_view_t *self)
 
   /* connect signal for mipmap update for a redraw */
   dt_control_signal_connect(darktable.signals, DT_SIGNAL_DEVELOP_MIPMAP_UPDATED,
-			    G_CALLBACK(_capture_mipamps_updated_signal_callback), 
-          (gpointer)self);
+                            G_CALLBACK(_capture_mipamps_updated_signal_callback),
+                            (gpointer)self);
 
 
   /* connect signal for fimlstrip image activate */
-  dt_control_signal_connect(darktable.signals, 
-			    DT_SIGNAL_VIEWMANAGER_FILMSTRIP_ACTIVATE,
-			    G_CALLBACK(_view_capture_filmstrip_activate_callback),
-			    self);
+  dt_control_signal_connect(darktable.signals,
+                            DT_SIGNAL_VIEWMANAGER_FILMSTRIP_ACTIVATE,
+                            G_CALLBACK(_view_capture_filmstrip_activate_callback),
+                            self);
 
   dt_view_filmstrip_scroll_to_image(darktable.view_manager, lib->image_id, TRUE);
 
@@ -481,8 +507,8 @@ void leave(dt_view_t *self)
 
   /* disconnect from filmstrip image activate */
   dt_control_signal_disconnect(darktable.signals,
-			       G_CALLBACK(_view_capture_filmstrip_activate_callback),
-			       (gpointer)self);
+                               G_CALLBACK(_view_capture_filmstrip_activate_callback),
+                               (gpointer)self);
 }
 
 void reset(dt_view_t *self)
@@ -527,7 +553,7 @@ void mouse_moved(dt_view_t *self, double x, double y, int which)
     lib->live_view_zoom_cursor_y = y;
     gchar str[20];
     sprintf(str, "%u,%u", cam->live_view_zoom_x, cam->live_view_zoom_y);
-    dt_camctl_camera_set_property(darktable.camctl, NULL, "eoszoomposition", str);
+    dt_camctl_camera_set_property_string(darktable.camctl, NULL, "eoszoomposition", str);
   }
   dt_control_queue_redraw_center();
 }
@@ -563,9 +589,9 @@ int button_pressed(dt_view_t *self, double x, double y, int which, int type, uin
   {
     cam->live_view_zoom = !cam->live_view_zoom;
     if(cam->live_view_zoom == TRUE)
-      dt_camctl_camera_set_property(darktable.camctl, NULL, "eoszoom", "5");
+      dt_camctl_camera_set_property_string(darktable.camctl, NULL, "eoszoom", "5");
     else
-      dt_camctl_camera_set_property(darktable.camctl, NULL, "eoszoom", "1");
+      dt_camctl_camera_set_property_string(darktable.camctl, NULL, "eoszoom", "1");
     return 1;
   }
   return 0;

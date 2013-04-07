@@ -46,7 +46,7 @@ groups ()
 
 int flags()
 {
-  return IOP_FLAGS_HIDDEN;
+  return IOP_FLAGS_HIDDEN | IOP_FLAGS_ONE_INSTANCE;
 }
 
 void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void *i, void *o, const dt_iop_roi_t *roi_in, const dt_iop_roi_t *roi_out)
@@ -121,7 +121,11 @@ void commit_params (struct dt_iop_module_t *self, dt_iop_params_t *p1, dt_dev_pi
   {
     int32_t tmp;
     if (k<0x10000*p->linear) tmp = MIN(c*k, 0xFFFF);
-    else tmp = MIN(powf(a*k/0x10000+b, g)*0x10000, 0xFFFF);
+    else
+    {
+      const float _t = powf(a*k/0x10000+b, g)*0x10000;
+      tmp = MIN(_t, 0xFFFF);
+    }
     d->table[k] = tmp>>8;
   }
 #endif
@@ -161,6 +165,7 @@ void init(dt_iop_module_t *module)
   module->gui_data = NULL;
   module->priority = 1000; // module order created by iop_dependencies.py, do not edit!
   module->hide_enable_button = 1;
+  module->default_enabled = 1;
   dt_iop_gamma_params_t tmp = (dt_iop_gamma_params_t)
   {
     1.0, 1.0

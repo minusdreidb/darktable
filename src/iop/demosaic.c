@@ -116,7 +116,7 @@ groups ()
 int
 flags ()
 {
-  return IOP_FLAGS_ALLOW_TILING;
+  return IOP_FLAGS_ALLOW_TILING | IOP_FLAGS_ONE_INSTANCE;
 }
 
 void init_key_accels(dt_iop_module_so_t *self)
@@ -322,15 +322,15 @@ color_smoothing(float *out, const dt_iop_roi_t *const roi_out, const int num_pas
 #undef SWAP
 
 static void
-green_equilibration_lavg(float *out, const float *const in, const int width, const int height, const uint32_t filters, const int x, const int y, const int in_place)
+green_equilibration_lavg(float *out, const float *const in, const int width, const int height, const uint32_t filters, const int x, const int y, const int in_place, const float thr)
 {
-  int oj = 2, oi = 2;
-  const float thr = 0.01f;
   const float maximum = 1.0f;
+
+  int oj = 2, oi = 2;
   if(FC(oj+y, oi+x, filters) != 1) oj++;
   if(FC(oj+y, oi+x, filters) != 1) oi++;
   if(FC(oj+y, oi+x, filters) != 1) oj--;
-  
+
   if(!in_place)
     memcpy(out,in,height*width*sizeof(float));
 
@@ -352,7 +352,10 @@ green_equilibration_lavg(float *out, const float *const in, const int width, con
 
       const float m1 = (o1_1+o1_2+o1_3+o1_4)/4.0f;
       const float m2 = (o2_1+o2_2+o2_3+o2_4)/4.0f;
-      if (m2 > 0.0f)
+
+      // prevent divide by zero and ...
+      // guard against m1/m2 becoming too large (due to m2 being too small) which results in hot pixels
+      if (m2>0.0f && m1/m2<maximum*2.0f)
       {
         const float c1 = (fabsf(o1_1-o1_2)+fabsf(o1_1-o1_3)+fabsf(o1_1-o1_4)+fabsf(o1_2-o1_3)+fabsf(o1_3-o1_4)+fabsf(o1_2-o1_4))/6.0f;
         const float c2 = (fabsf(o2_1-o2_2)+fabsf(o2_1-o2_3)+fabsf(o2_1-o2_4)+fabsf(o2_2-o2_3)+fabsf(o2_3-o2_4)+fabsf(o2_2-o2_4))/6.0f;
@@ -634,9 +637,27 @@ modify_roi_in (struct dt_iop_module_t *self, struct dt_dev_pixelpipe_iop_t *piec
     roi_in->height = piece->pipe->image.height;
 }
 
+static int get_quality()
+{
+  int qual = 1;
+  gchar *quality = dt_conf_get_string("plugins/darkroom/demosaic/quality");
+  if(quality)
+  {
+    if(!strcmp(quality, "always bilinear (fast)"))
+      qual = 0;
+    else if(!strcmp(quality, "full (possibly slow)"))
+      qual = 2;
+    g_free(quality);
+  }
+  return qual;
+}
+
 void
 process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void *i, void *o, const dt_iop_roi_t *roi_in, const dt_iop_roi_t *roi_out)
 {
+  const dt_image_t *img = &self->dev->image_storage;
+  const float threshold = 0.0001f * img->exif_iso;
+
   dt_iop_roi_t roi, roo;
   roi = *roi_in;
   roo = *roi_out;
@@ -644,8 +665,14 @@ process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void *i, v
   // roi_out->scale = global scale: (iscale == 1.0, always when demosaic is on)
 
   dt_iop_demosaic_data_t *data = (dt_iop_demosaic_data_t *)piece->data;
+
+  const int qual = get_quality();
+  int demosaicing_method = data->demosaicing_method;
+  if(piece->pipe->type == DT_DEV_PIXELPIPE_FULL && qual < 2) // only overwrite setting if quality << requested and in dr mode
+    demosaicing_method = DT_IOP_DEMOSAIC_PPG;
+
   const float *const pixels = (float *)i;
-  if(roi_out->scale > .999f)
+  if(roi_out->scale > .99999f && roi_out->scale < 1.00001f)
   {
     // output 1:1
     // green eq:
@@ -655,21 +682,21 @@ process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void *i, v
       switch(data->green_eq)
       {
         case DT_IOP_GREEN_EQ_FULL:
-          green_equilibration_favg(in, pixels, roi_in->width, roi_in->height, 
-                        data->filters,  roi_in->x, roi_in->y);
+          green_equilibration_favg(in, pixels, roi_in->width, roi_in->height,
+                                   data->filters,  roi_in->x, roi_in->y);
           break;
         case DT_IOP_GREEN_EQ_LOCAL:
           green_equilibration_lavg(in, pixels, roi_in->width, roi_in->height,
-                        data->filters, roi_in->x, roi_in->y, 0);
+                                   data->filters, roi_in->x, roi_in->y, 0, threshold);
           break;
         case DT_IOP_GREEN_EQ_BOTH:
-          green_equilibration_favg(in, pixels, roi_in->width, roi_in->height, 
-                        data->filters,  roi_in->x, roi_in->y);
+          green_equilibration_favg(in, pixels, roi_in->width, roi_in->height,
+                                   data->filters,  roi_in->x, roi_in->y);
           green_equilibration_lavg(in, in, roi_in->width, roi_in->height,
-                        data->filters, roi_in->x, roi_in->y, 1);
+                                   data->filters, roi_in->x, roi_in->y, 1, threshold);
           break;
-      } 
-      if (data->demosaicing_method != DT_IOP_DEMOSAIC_AMAZE)
+      }
+      if (demosaicing_method != DT_IOP_DEMOSAIC_AMAZE)
         demosaic_ppg((float *)o, in, &roo, &roi, data->filters, data->median_thrs);
       else
         amaze_demosaic_RT(self, piece, in, (float *)o, &roi, &roo, data->filters);
@@ -677,13 +704,15 @@ process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void *i, v
     }
     else
     {
-      if (data->demosaicing_method != DT_IOP_DEMOSAIC_AMAZE)
+      if (demosaicing_method != DT_IOP_DEMOSAIC_AMAZE)
         demosaic_ppg((float *)o, pixels, &roo, &roi, data->filters, data->median_thrs);
       else
         amaze_demosaic_RT(self, piece, pixels, (float *)o, &roi, &roo, data->filters);
     }
   }
-  else if(roi_out->scale > .5f)
+  else if(roi_out->scale > .5f ||                                      // also covers roi_out->scale >1
+          (piece->pipe->type == DT_DEV_PIXELPIPE_FULL && qual > 0) ||  // or in darkroom mode and quality requested by user settings
+          (piece->pipe->type == DT_DEV_PIXELPIPE_EXPORT))              // we assume you always want that for exports.
   {
     // demosaic and then clip and zoom
     // roo.x = roi_out->x / global_scale;
@@ -699,21 +728,22 @@ process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void *i, v
       switch(data->green_eq)
       {
         case DT_IOP_GREEN_EQ_FULL:
-          green_equilibration_favg(in, pixels, roi_in->width, roi_in->height, 
-                        data->filters,  roi_in->x, roi_in->y);
+          green_equilibration_favg(in, pixels, roi_in->width, roi_in->height,
+                                   data->filters,  roi_in->x, roi_in->y);
           break;
         case DT_IOP_GREEN_EQ_LOCAL:
           green_equilibration_lavg(in, pixels, roi_in->width, roi_in->height,
-                        data->filters, roi_in->x, roi_in->y, 0);
+                                   data->filters, roi_in->x, roi_in->y, 0, threshold);
           break;
         case DT_IOP_GREEN_EQ_BOTH:
-          green_equilibration_favg(in, pixels, roi_in->width, roi_in->height, 
-                        data->filters,  roi_in->x, roi_in->y);
+          green_equilibration_favg(in, pixels, roi_in->width, roi_in->height,
+                                   data->filters,  roi_in->x, roi_in->y);
           green_equilibration_lavg(in, in, roi_in->width, roi_in->height,
-                        data->filters, roi_in->x, roi_in->y, 1);
+                                   data->filters, roi_in->x, roi_in->y, 1, threshold);
           break;
       }
-      if (data->demosaicing_method != DT_IOP_DEMOSAIC_AMAZE)
+      // wanted ppg or zoomed out a lot and quality is limited to 1
+      if(demosaicing_method != DT_IOP_DEMOSAIC_AMAZE)
         demosaic_ppg(tmp, in, &roo, &roi, data->filters, data->median_thrs);
       else
         amaze_demosaic_RT(self, piece, in, tmp, &roi, &roo, data->filters);
@@ -721,7 +751,7 @@ process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void *i, v
     }
     else
     {
-      if (data->demosaicing_method != DT_IOP_DEMOSAIC_AMAZE)
+      if(demosaicing_method != DT_IOP_DEMOSAIC_AMAZE)
         demosaic_ppg(tmp, pixels, &roo, &roi, data->filters, data->median_thrs);
       else
         amaze_demosaic_RT(self, piece, pixels, tmp, &roi, &roo, data->filters);
@@ -756,11 +786,20 @@ process_cl (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_mem 
 {
   dt_iop_demosaic_data_t *data = (dt_iop_demosaic_data_t *)piece->data;
   dt_iop_demosaic_global_data_t *gd = (dt_iop_demosaic_global_data_t *)self->data;
+  const dt_image_t *img = &self->dev->image_storage;
+  const float threshold = 0.0001f * img->exif_iso;
 
+  const int qual = get_quality();
   const struct dt_interpolation* interpolation = dt_interpolation_new(DT_INTERPOLATION_USERPREF);
   if(interpolation->id != DT_INTERPOLATION_BILINEAR && roi_out->scale <= .99999f && roi_out->scale > 0.5f)
   {
-    dt_print(DT_DEBUG_OPENCL, "[opencl_demosaic] only bilinear interpolation mode supported here\n");
+    dt_print(DT_DEBUG_OPENCL, "[opencl_demosaic] only bilinear interpolation currently supported by opencl demosaic\n");
+    return FALSE;
+  }
+
+  if(roi_out->scale >= 1.00001f)
+  {
+    dt_print(DT_DEBUG_OPENCL, "[opencl_demosaic] demosaic with upscaling not yet supported by opencl code\n");
     return FALSE;
   }
 
@@ -775,18 +814,19 @@ process_cl (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_mem 
     const int width = roi_out->width;
     const int height = roi_out->height;
     size_t sizes[2] = { ROUNDUPWD(width), ROUNDUPHT(height) };
-     // 1:1 demosaic
+    // 1:1 demosaic
     dev_green_eq = NULL;
     if(data->green_eq != DT_IOP_GREEN_EQ_NO)
     {
       // green equilibration
       dev_green_eq = dt_opencl_alloc_device(devid, roi_in->width, roi_in->height, sizeof(float));
-      if (dev_green_eq == NULL) goto error;      
+      if (dev_green_eq == NULL) goto error;
       dt_opencl_set_kernel_arg(devid, gd->kernel_green_eq, 0, sizeof(cl_mem), &dev_in);
       dt_opencl_set_kernel_arg(devid, gd->kernel_green_eq, 1, sizeof(cl_mem), &dev_green_eq);
       dt_opencl_set_kernel_arg(devid, gd->kernel_green_eq, 2, sizeof(int), &width);
       dt_opencl_set_kernel_arg(devid, gd->kernel_green_eq, 3, sizeof(int), &height);
       dt_opencl_set_kernel_arg(devid, gd->kernel_green_eq, 4, sizeof(uint32_t), (void*)&data->filters);
+      dt_opencl_set_kernel_arg(devid, gd->kernel_green_eq, 5, sizeof(float), (void*)&threshold);
       err = dt_opencl_enqueue_kernel_2d(devid, gd->kernel_green_eq, sizes);
       if(err != CL_SUCCESS) goto error;
       dev_in = dev_green_eq;
@@ -801,7 +841,7 @@ process_cl (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_mem 
       dt_opencl_set_kernel_arg(devid, gd->kernel_pre_median, 3, sizeof(int), &height);
       dt_opencl_set_kernel_arg(devid, gd->kernel_pre_median, 4, sizeof(uint32_t), (void*)&data->filters);
       dt_opencl_set_kernel_arg(devid, gd->kernel_pre_median, 5, sizeof(float), (void*)&data->median_thrs);
-      dt_opencl_set_kernel_arg(devid, gd->kernel_pre_median, 6, sizeof(uint32_t), (void*)&one);
+      dt_opencl_set_kernel_arg(devid, gd->kernel_pre_median, 6, sizeof(int), (void*)&one);
       err = dt_opencl_enqueue_kernel_2d(devid, gd->kernel_pre_median, sizes);
       if(err != CL_SUCCESS) goto error;
 
@@ -842,7 +882,9 @@ process_cl (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_mem 
     if(err != CL_SUCCESS) goto error;
 
   }
-  else if(roi_out->scale > .5f)
+  else if(roi_out->scale > .5f ||  // full needed because zoomed in enough
+          (piece->pipe->type == DT_DEV_PIXELPIPE_FULL && qual > 0) ||  // or in darkroom mode and quality requested by user settings
+          (piece->pipe->type == DT_DEV_PIXELPIPE_EXPORT))              // we assume you always want that for exports.
   {
     // need to scale to right res
     dev_tmp = dt_opencl_alloc_device(devid, roi_in->width, roi_in->height, 4*sizeof(float));
@@ -860,6 +902,7 @@ process_cl (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_mem 
       dt_opencl_set_kernel_arg(devid, gd->kernel_green_eq, 2, sizeof(int), &width);
       dt_opencl_set_kernel_arg(devid, gd->kernel_green_eq, 3, sizeof(int), &height);
       dt_opencl_set_kernel_arg(devid, gd->kernel_green_eq, 4, sizeof(uint32_t), (void*)&data->filters);
+      dt_opencl_set_kernel_arg(devid, gd->kernel_green_eq, 5, sizeof(float), (void*)&threshold);
       err = dt_opencl_enqueue_kernel_2d(devid, gd->kernel_green_eq, sizes);
       if(err != CL_SUCCESS) goto error;
       dev_in = dev_green_eq;
@@ -867,12 +910,14 @@ process_cl (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_mem 
 
     if(data->median_thrs > 0.0f)
     {
+      const int one = 1;
       dt_opencl_set_kernel_arg(devid, gd->kernel_pre_median, 0, sizeof(cl_mem), &dev_in);
       dt_opencl_set_kernel_arg(devid, gd->kernel_pre_median, 1, sizeof(cl_mem), &dev_tmp);
       dt_opencl_set_kernel_arg(devid, gd->kernel_pre_median, 2, sizeof(int), &width);
       dt_opencl_set_kernel_arg(devid, gd->kernel_pre_median, 3, sizeof(int), &height);
       dt_opencl_set_kernel_arg(devid, gd->kernel_pre_median, 4, sizeof(uint32_t), (void*)&data->filters);
       dt_opencl_set_kernel_arg(devid, gd->kernel_pre_median, 5, sizeof(float), (void*)&data->median_thrs);
+      dt_opencl_set_kernel_arg(devid, gd->kernel_pre_median, 6, sizeof(int), (void*)&one);
       err = dt_opencl_enqueue_kernel_2d(devid, gd->kernel_pre_median, sizes);
       if(err != CL_SUCCESS) goto error;
 
@@ -931,7 +976,7 @@ process_cl (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_mem 
   else
   {
     // sample half-size image:
-    int zero = 0;
+    const int zero = 0;
     cl_mem dev_pix = dev_in;
     if(piece->pipe->type == DT_DEV_PIXELPIPE_EXPORT && data->median_thrs > 0.0f)
     {
@@ -947,7 +992,7 @@ process_cl (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_mem 
       dt_opencl_set_kernel_arg(devid, gd->kernel_pre_median, 3, sizeof(int), &height);
       dt_opencl_set_kernel_arg(devid, gd->kernel_pre_median, 4, sizeof(uint32_t), (void*)&data->filters);
       dt_opencl_set_kernel_arg(devid, gd->kernel_pre_median, 5, sizeof(float), (void*)&data->median_thrs);
-      dt_opencl_set_kernel_arg(devid, gd->kernel_pre_median, 6, sizeof(uint32_t), (void*)&zero);
+      dt_opencl_set_kernel_arg(devid, gd->kernel_pre_median, 6, sizeof(int), (void*)&zero);
       err = dt_opencl_enqueue_kernel_2d(devid, gd->kernel_pre_median, sizes);
       if(err != CL_SUCCESS) goto error;
       dev_pix = dev_tmp;
@@ -989,21 +1034,21 @@ process_cl (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_mem 
     size_t workgroupsize = 0;          // the maximum number of items in a work group
     unsigned long localmemsize = 0;    // the maximum amount of local memory we can use
     size_t kernelworkgroupsize = 0;    // the maximum amount of items in work group for this kernel
-  
+
     // Make sure blocksize is not too large. As our kernel is very register hungry we
     // need to take maximum work group size into account
     int blocksize = BLOCKSIZE;
     int blockwd;
     int blockht;
     if(dt_opencl_get_work_group_limits(devid, maxsizes, &workgroupsize, &localmemsize) == CL_SUCCESS &&
-       dt_opencl_get_kernel_work_group_size(devid, gd->kernel_color_smoothing, &kernelworkgroupsize) == CL_SUCCESS)
+        dt_opencl_get_kernel_work_group_size(devid, gd->kernel_color_smoothing, &kernelworkgroupsize) == CL_SUCCESS)
     {
 
       while(blocksize > maxsizes[0] || blocksize > maxsizes[1] || blocksize*blocksize > workgroupsize ||
             (blocksize+2)*(blocksize+2)*4*sizeof(float) > localmemsize)
       {
         if(blocksize == 1) break;
-        blocksize >>= 1;    
+        blocksize >>= 1;
       }
 
       blockwd = blockht = blocksize;
@@ -1029,7 +1074,7 @@ process_cl (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_mem 
     cl_mem dev_t1 = dev_out;
     cl_mem dev_t2 = dev_tmp;
 
-    for(int pass = 0; pass < data->color_smoothing; pass++)
+    for(uint32_t pass = 0; pass < data->color_smoothing; pass++)
     {
 
       dt_opencl_set_kernel_arg(devid, gd->kernel_color_smoothing, 0, sizeof(cl_mem), &dev_t1);
@@ -1071,14 +1116,16 @@ void tiling_callback  (struct dt_iop_module_t *self, struct dt_dev_pixelpipe_iop
 {
   dt_iop_demosaic_data_t *data = (dt_iop_demosaic_data_t *)piece->data;
 
-  float ioratio = (float)roi_out->width*roi_out->height/((float)roi_in->width*roi_in->height);
-  float smooth = data->color_smoothing ? ioratio : 0.0f;
+  const int qual = get_quality();
+  const float ioratio = (float)roi_out->width*roi_out->height/((float)roi_in->width*roi_in->height);
+  const float smooth = data->color_smoothing ? ioratio : 0.0f;
 
   tiling->factor = 1.0f + ioratio;
 
-  if(roi_out->scale > 0.999f)
+  if(roi_out->scale > 0.99999f && roi_out->scale < 1.00001f)
     tiling->factor += fmax(0.25f, smooth);
-  else if(roi_out->scale > 0.5f)
+  else if(roi_out->scale > 0.5f || 
+          (piece->pipe->type == DT_DEV_PIXELPIPE_FULL && qual > 0) || (piece->pipe->type == DT_DEV_PIXELPIPE_EXPORT))
     tiling->factor += fmax(1.25f, smooth);
   else
     tiling->factor += fmax(0.25f, smooth);
@@ -1097,7 +1144,7 @@ void init(dt_iop_module_t *module)
   module->params = malloc(sizeof(dt_iop_demosaic_params_t));
   module->default_params = malloc(sizeof(dt_iop_demosaic_params_t));
   module->default_enabled = 1;
-  module->priority = 117; // module order created by iop_dependencies.py, do not edit!
+  module->priority = 127; // module order created by iop_dependencies.py, do not edit!
   module->hide_enable_button = 1;
   module->params_size = sizeof(dt_iop_demosaic_params_t);
   module->gui_data = NULL;
@@ -1154,7 +1201,7 @@ void commit_params (struct dt_iop_module_t *self, dt_iop_params_t *params, dt_de
   dt_iop_demosaic_params_t *p = (dt_iop_demosaic_params_t *)params;
   dt_iop_demosaic_data_t *d = (dt_iop_demosaic_data_t *)piece->data;
   d->filters = dt_image_flipped_filter(&pipe->image);
-  if(!(pipe->image.flags & DT_IMAGE_RAW) || pipe->type == DT_DEV_PIXELPIPE_PREVIEW) piece->enabled = 0;
+  if(!(pipe->image.flags & DT_IMAGE_RAW) || dt_dev_pixelpipe_uses_downsampled_input(pipe)) piece->enabled = 0;
   d->green_eq = p->green_eq;
   d->color_smoothing = p->color_smoothing;
   d->median_thrs = p->median_thrs;
@@ -1265,8 +1312,8 @@ void gui_init     (struct dt_iop_module_t *self)
   self->widget = gtk_vbox_new(TRUE, DT_BAUHAUS_SPACE);
 
   g->demosaic_method = dt_bauhaus_combobox_new(self);
-  dt_bauhaus_combobox_add(g->demosaic_method, _("ppg"));
-  dt_bauhaus_combobox_add(g->demosaic_method, _("AMaZE"));
+  dt_bauhaus_combobox_add(g->demosaic_method, _("ppg (fast)"));
+  dt_bauhaus_combobox_add(g->demosaic_method, _("amaze (slow)"));
   dt_bauhaus_widget_set_label(g->demosaic_method, _("method"));
   gtk_box_pack_start(GTK_BOX(self->widget), g->demosaic_method, TRUE, TRUE, 0);
   g_object_set(G_OBJECT(g->demosaic_method), "tooltip-text", _("demosaicing raw data method"), (char *)NULL);

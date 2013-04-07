@@ -42,11 +42,11 @@ void* _aligned_malloc(size_t bytes, size_t alignment);
 #define _aligned_free(a) do { free(a); } while (0)
 #ifndef MIN
 #define MIN(a, b)  lmin(a,b)
-typedef unsigned long long uint64;
 #endif
 #ifndef MAX
 #define MAX(a, b)  lmax(a,b)
 #endif
+typedef unsigned long long uint64;
 #ifndef __MINGW32__
 typedef char* LPCWSTR;
 #endif
@@ -182,6 +182,12 @@ inline vector<string> split_string(string input, char c = ' ') {
 
   return result;
 }
+
+typedef enum {
+  BitOrder_Plain,  /* Memory order */
+  BitOrder_Jpeg,   /* Input is added to stack byte by byte, and output is lifted from top */
+  BitOrder_Jpeg32, /* Same as above, but 32 bits at the time */
+} BitOrder;
 
 } // namespace RawSpeed
 

@@ -119,7 +119,7 @@ void connect_key_accels(dt_lib_module_t *self)
 void property_changed_callback(GtkComboBox *cb,gpointer data)
 {
   dt_lib_camera_property_t *prop=(dt_lib_camera_property_t *)data;
-  dt_camctl_camera_set_property(darktable.camctl,NULL,prop->property_name,gtk_combo_box_get_active_text(prop->values));
+  dt_camctl_camera_set_property_string(darktable.camctl,NULL,prop->property_name,gtk_combo_box_get_active_text(prop->values));
 }
 
 /** Add  a new property of camera to the gui */
@@ -131,6 +131,8 @@ dt_lib_camera_property_t *_lib_property_add_new(dt_lib_camera_t * lib, const gch
     if( (value=dt_camctl_camera_property_get_first_choice(darktable.camctl,NULL,propertyname)) != NULL )
     {
       // We got a value for property lets construct the gui for the property and add values
+      int i=0;
+      const char *current_value = dt_camctl_camera_get_property(darktable.camctl, NULL, propertyname);
       dt_lib_camera_property_t *prop = malloc(sizeof(dt_lib_camera_property_t));
       memset(prop,0,sizeof(dt_lib_camera_property_t));
       prop->name=label;
@@ -144,6 +146,9 @@ dt_lib_camera_property_t *_lib_property_add_new(dt_lib_camera_t * lib, const gch
       do
       {
         gtk_combo_box_append_text(prop->values, g_dgettext("libgphoto2-2", value));
+        if(!strcmp(current_value, g_dgettext("libgphoto2-2", value)))
+          gtk_combo_box_set_active(prop->values, i);
+        i++;
       }
       while( (value=dt_camctl_camera_property_get_next_choice(darktable.camctl,NULL,propertyname)) != NULL );
       lib->gui.properties=g_list_append(lib->gui.properties,prop);
@@ -248,6 +253,11 @@ static void _camera_tethered_downloaded_callback(const dt_camera_t *camera,const
 static void
 _capture_button_clicked(GtkWidget *widget, gpointer user_data)
 {
+  if (!dt_view_tethering_check_namepattern(darktable.view_manager) )
+  {
+    dt_control_log("The filename needs to contain $(SEQUENCE), shot aborted");
+    return;
+  }
   dt_lib_camera_t *lib=(dt_lib_camera_t *)user_data;
   uint32_t delay = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(lib->gui.tb1))==TRUE?(uint32_t)gtk_spin_button_get_value(GTK_SPIN_BUTTON(lib->gui.sb1)):0;
   uint32_t count = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(lib->gui.tb2))==TRUE?(uint32_t)gtk_spin_button_get_value(GTK_SPIN_BUTTON(lib->gui.sb2)):1;
@@ -372,7 +382,7 @@ static void _expose_info_bar(dt_lib_module_t *self, cairo_t *cr, int32_t width, 
 
   // Let's cook up the middle part of infobar
   gchar center[1024]= {0};
-  for(int i=0; i<g_list_length(lib->gui.properties); i++)
+  for(guint i=0; i<g_list_length(lib->gui.properties); i++)
   {
     dt_lib_camera_property_t *prop=(dt_lib_camera_property_t *)g_list_nth_data(lib->gui.properties,i);
     if( gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(prop->osd)) == TRUE )
@@ -487,7 +497,7 @@ gui_init (dt_lib_module_t *self)
   g_object_set(G_OBJECT( lib->gui.tb2), "tooltip-text", _("toggle sequenced capture mode"), (char *)NULL);
   g_object_set(G_OBJECT( lib->gui.tb3), "tooltip-text", _("toggle bracketed capture mode"), (char *)NULL);
   g_object_set(G_OBJECT( lib->gui.sb1), "tooltip-text", _("the count of seconds before actually doing a capture"), (char *)NULL);
-  g_object_set(G_OBJECT( lib->gui.sb2), "tooltip-text", _("the amount of images to capture in a sequence,\nyou can use this in conjuction with delayed mode to create stop-motion sequences."), (char *)NULL);
+  g_object_set(G_OBJECT( lib->gui.sb2), "tooltip-text", _("the amount of images to capture in a sequence,\nyou can use this in conjunction with delayed mode to create stop-motion sequences."), (char *)NULL);
   g_object_set(G_OBJECT( lib->gui.sb3), "tooltip-text", _("the amount of brackets on each side of centered shoot, amount of images = (brackets*2)+1."), (char *)NULL);
   g_object_set(G_OBJECT( lib->gui.sb4), "tooltip-text", _("the amount of steps per bracket, steps is camera configurable and usally 3 steps per stop\nwith other words, 3 steps is 1EV exposure step between brackets."), (char *)NULL);
 
@@ -669,7 +679,7 @@ gui_init (dt_lib_module_t *self)
 
   gtk_box_pack_start (vbox1, GTK_WIDGET ( gtk_label_new (_("label"))), TRUE, TRUE, 0);
   lib->gui.plabel = gtk_entry_new ();
-  dt_gui_key_accel_block_on_focus (lib->gui.plabel);
+  dt_gui_key_accel_block_on_focus_connect (lib->gui.plabel);
   gtk_box_pack_start (vbox2, GTK_WIDGET ( lib->gui.plabel ), TRUE, TRUE, 0);
 
   hbox = GTK_BOX(gtk_hbox_new(FALSE, 0));
@@ -677,7 +687,7 @@ gui_init (dt_lib_module_t *self)
   GtkWidget *widget = gtk_button_new_with_label("O");
   g_signal_connect (G_OBJECT (widget), "clicked", G_CALLBACK (_show_property_popupmenu_clicked), lib);
   lib->gui.pname = gtk_entry_new ();
-  dt_gui_key_accel_block_on_focus (lib->gui.pname);
+  dt_gui_key_accel_block_on_focus_connect (lib->gui.pname);
   gtk_box_pack_start (hbox, GTK_WIDGET ( lib->gui.pname ), TRUE, TRUE, 0);
   gtk_box_pack_start (hbox, GTK_WIDGET ( widget ), FALSE, FALSE, 0);
   gtk_box_pack_start (vbox2, GTK_WIDGET ( hbox ), TRUE, TRUE, 0);
@@ -706,6 +716,8 @@ void
 gui_cleanup (dt_lib_module_t *self)
 {
   dt_lib_camera_t *lib = self->data;
+  dt_gui_key_accel_block_on_focus_disconnect (lib->gui.plabel);
+  dt_gui_key_accel_block_on_focus_disconnect (lib->gui.pname);
   // remove listener from camera control..
   dt_camctl_tether_mode(darktable.camctl,NULL,FALSE);
   dt_camctl_unregister_listener(darktable.camctl,lib->data.listener);

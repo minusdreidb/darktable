@@ -36,16 +36,27 @@
 #include <inttypes.h>
 
 #include <librsvg/rsvg.h>
+// ugh, ugly hack. why do people break stuff all the time?
+#ifndef RSVG_CAIRO_H
 #include <librsvg/rsvg-cairo.h>
+#endif
 
 #include "common/metadata.h"
 #include "common/utility.h"
 #include "common/file_location.h"
 
 #define CLIP(x) ((x<0)?0.0:(x>1.0)?1.0:x)
-DT_MODULE(1)
+DT_MODULE(2)
 
 // gchar *checksum = g_compute_checksum_for_data(G_CHECKSUM_MD5,data,length);
+
+typedef enum dt_iop_watermark_base_scale_t
+{
+  DT_SCALE_IMAGE          = 0,
+  DT_SCALE_LARGER_BORDER  = 1,
+  DT_SCALE_SMALLER_BORDER = 2
+}
+dt_iop_watermark_base_scale_t;
 
 typedef struct dt_iop_watermark_params_t
 {
@@ -59,6 +70,7 @@ typedef struct dt_iop_watermark_params_t
   float yoffset;
   /** Alignment value 0-8 3x3 */
   int alignment;
+  dt_iop_watermark_base_scale_t sizeto;
   char filename[64];
 }
 dt_iop_watermark_params_t;
@@ -70,6 +82,7 @@ typedef struct dt_iop_watermark_data_t
   float xoffset;
   float yoffset;
   int alignment;
+  dt_iop_watermark_base_scale_t sizeto;
   char filename[64];
 }
 dt_iop_watermark_data_t;
@@ -80,9 +93,48 @@ typedef struct dt_iop_watermark_gui_data_t
   GtkDarktableButton *dtbutton1;	                                         // refresh watermarks...
   GtkDarktableToggleButton *dtba[9];	                                   // Alignment buttons
   GtkWidget *scale1,*scale2,*scale3,*scale4;      	     // opacity, scale, xoffs, yoffs
+  GtkWidget *sizeto;		                                             // relative size to
 }
 dt_iop_watermark_gui_data_t;
 
+int
+legacy_params (dt_iop_module_t *self, const void *const old_params, const int old_version, void *new_params, const int new_version)
+{
+  if(old_version == 1 && new_version == 2)
+  {
+    typedef struct dt_iop_watermark_params_v1_t
+    {
+      /** opacity value of rendering watermark */
+      float opacity;
+      /** scale value of rendering watermark */
+      float scale;
+      /** Pixel independent xoffset, 0 to 1 */
+      float xoffset;
+      /** Pixel independent yoffset, 0 to 1 */
+      float yoffset;
+      /** Alignment value 0-8 3x3 */
+      int alignment;
+      char filename[64];
+    }
+    dt_iop_watermark_params_v1_t;
+
+    dt_iop_watermark_params_v1_t *o = (dt_iop_watermark_params_v1_t *)old_params;
+    dt_iop_watermark_params_t *n = (dt_iop_watermark_params_t *)new_params;
+    dt_iop_watermark_params_t *d = (dt_iop_watermark_params_t *)self->default_params;
+
+    *n = *d;  // start with a fresh copy of default parameters
+
+    n->opacity = o->opacity;
+    n->scale = o->scale;
+    n->xoffset = o->xoffset;
+    n->yoffset = o->yoffset;
+    n->alignment = o->alignment;
+    n->sizeto = DT_SCALE_IMAGE;
+    strncpy(n->filename, o->filename, 64);
+    return 0;
+  }
+  return 1;
+}
 
 const char *name()
 {
@@ -117,7 +169,7 @@ void init_key_accels(dt_iop_module_so_t *self)
 void connect_key_accels(dt_iop_module_t *self)
 {
   dt_iop_watermark_gui_data_t *g =
-      (dt_iop_watermark_gui_data_t*)self->gui_data;
+    (dt_iop_watermark_gui_data_t*)self->gui_data;
 
   dt_accel_connect_button_iop(self, "refresh", GTK_WIDGET(g->dtbutton1));
   dt_accel_connect_slider_iop(self, "opacity",
@@ -179,13 +231,15 @@ static gchar * _watermark_get_svgdoc( dt_iop_module_t *self, dt_iop_watermark_da
   gsize length;
 
   gchar *svgdoc=NULL;
-  gchar configdir[1024],datadir[1024], *filename;
-  dt_loc_get_datadir(datadir, 1024);
-  dt_loc_get_user_config_dir(configdir, 1024);
-  g_strlcat(datadir,"/watermarks/",1024);
-  g_strlcat(configdir,"/watermarks/",1024);
-  g_strlcat(datadir,data->filename,1024);
-  g_strlcat(configdir,data->filename,1024);
+  gchar configdir[DT_MAX_PATH_LEN];
+  gchar datadir[DT_MAX_PATH_LEN];
+  gchar *filename;
+  dt_loc_get_datadir(datadir, DT_MAX_PATH_LEN);
+  dt_loc_get_user_config_dir(configdir, DT_MAX_PATH_LEN);
+  g_strlcat(datadir,"/watermarks/", DT_MAX_PATH_LEN);
+  g_strlcat(configdir,"/watermarks/", DT_MAX_PATH_LEN);
+  g_strlcat(datadir,data->filename, DT_MAX_PATH_LEN);
+  g_strlcat(configdir,data->filename, DT_MAX_PATH_LEN);
 
   if (g_file_test(configdir,G_FILE_TEST_EXISTS))
     filename=configdir;
@@ -199,14 +253,14 @@ static gchar * _watermark_get_svgdoc( dt_iop_module_t *self, dt_iop_watermark_da
   // EXIF datetime
   struct tm tt_exif = {0};
   if(sscanf(image->exif_datetime_taken,"%d:%d:%d %d:%d:%d",
-              &tt_exif.tm_year,
-              &tt_exif.tm_mon,
-              &tt_exif.tm_mday,
-              &tt_exif.tm_hour,
-              &tt_exif.tm_min,
-              &tt_exif.tm_sec
-             ) == 6
-     )
+            &tt_exif.tm_year,
+            &tt_exif.tm_mon,
+            &tt_exif.tm_mday,
+            &tt_exif.tm_hour,
+            &tt_exif.tm_min,
+            &tt_exif.tm_sec
+           ) == 6
+    )
   {
     tt_exif.tm_year-=1900;
     tt_exif.tm_mon--;
@@ -556,22 +610,6 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
     return;
   }
 
-  /* get the dimension of svg */
-  RsvgDimensionData dimension;
-  rsvg_handle_get_dimensions (svg,&dimension);
-
-  /* calculate aligment of watermark */
-  const float iw=piece->buf_in.width*roi_out->scale;
-  const float ih=piece->buf_in.height*roi_out->scale;
-
-  float scale=1.0;
-  if ((dimension.width/dimension.height)>1.0)
-    scale = iw/dimension.width;
-  else
-    scale = ih/dimension.height;
-
-  scale *= (data->scale/100.0);
-
   /* setup stride for performance */
   int stride = cairo_format_stride_for_width (CAIRO_FORMAT_ARGB32,roi_out->width);
 
@@ -590,30 +628,118 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
   /* create cairo context and setup transformation/scale */
   cairo_t *cr = cairo_create (surface);
 
+  /* get the dimension of svg */
+  RsvgDimensionData dimension;
+  rsvg_handle_get_dimensions (svg,&dimension);
+
+  //  width/height of current (possibly cropped) image
+  const float iw = piece->buf_in.width;
+  const float ih = piece->buf_in.height;
+  const float uscale = data->scale / 100.0;   // user scale, from GUI in percent
+
+  // wbase, hbase are the base width and height, this is the multiplicator used for the offset computing
+  // scale is the scale of the watermark itself and is used only to render it.
+
+  float wbase, hbase, scale;
+
+  if (data->sizeto == DT_SCALE_IMAGE)
+  {
+    // in image mode, the wbase and hbase are just the image width and height
+    wbase = iw;
+    hbase = ih;
+    if (dimension.width>dimension.height)
+      scale = (iw*roi_out->scale)/dimension.width;
+    else
+      scale = (ih*roi_out->scale)/dimension.height;
+  }
+  else
+  {
+    // in larger/smaller side mode, set wbase and hbase to the largest or smallest side of the image
+    float larger;
+    if (dimension.width > dimension.height)
+      larger = (float)dimension.width;
+    else
+      larger = (float)dimension.height;
+
+    if (iw>ih)
+    {
+      wbase = hbase = (data->sizeto==DT_SCALE_LARGER_BORDER)?iw:ih;
+      scale = (data->sizeto==DT_SCALE_LARGER_BORDER)?(iw/larger):(ih/larger);
+    }
+    else
+    {
+      wbase = hbase = (data->sizeto==DT_SCALE_SMALLER_BORDER)?iw:ih;
+      scale = (data->sizeto==DT_SCALE_SMALLER_BORDER)?(iw/larger):(ih/larger);
+    }
+    scale *= roi_out->scale;
+  }
+
+  scale *= uscale;
+
+  // compute the width and height of the SVG object in image dimension. This is only used to properly
+  // layout the watermark based on the alignment.
+
+  float svg_width, svg_height;
+
+  if (dimension.width>dimension.height)
+  {
+    if (data->sizeto==DT_SCALE_IMAGE
+        || (iw>ih && data->sizeto==DT_SCALE_LARGER_BORDER)
+        || (iw<ih && data->sizeto==DT_SCALE_SMALLER_BORDER))
+    {
+      svg_width = iw * uscale;
+      svg_height = dimension.height * (svg_width / dimension.width);
+    }
+    else
+    {
+      svg_width = ih * uscale;
+      svg_height = dimension.height * (svg_width / dimension.width);
+    }
+  }
+  else
+  {
+    if (data->sizeto==DT_SCALE_IMAGE
+        || (ih>iw && data->sizeto==DT_SCALE_LARGER_BORDER)
+        || (ih<iw && data->sizeto==DT_SCALE_SMALLER_BORDER))
+    {
+      svg_height = ih * uscale;
+      svg_width = dimension.width * (dimension.height / svg_height);
+    }
+    else
+    {
+      svg_height = iw * uscale;
+      svg_width = dimension.width * (dimension.height / svg_height);
+    }
+  }
+
+  // compute translation for the given alignment in image dimension
+
   float ty=0,tx=0;
   if( data->alignment >=0 && data->alignment <3) // Align to verttop
     ty=0;
   else if( data->alignment >=3 && data->alignment <6) // Align to vertcenter
-    ty=(ih/2.0)-((dimension.height*scale)/2.0);
+    ty=(ih/2.0)-(svg_height/2.0);
   else if( data->alignment >=6 && data->alignment <9) // Align to vertbottom
-    ty=ih-(dimension.height*scale);
+    ty=ih-svg_height;
 
   if( data->alignment == 0 ||  data->alignment == 3 || data->alignment==6 )
     tx=0;
   else if( data->alignment == 1 ||  data->alignment == 4 || data->alignment==7 )
-    tx=(iw/2.0)-((dimension.width*scale)/2.0);
+    tx=(iw/2.0)-(svg_width/2.0);
   else if( data->alignment == 2 ||  data->alignment == 5 || data->alignment==8 )
-    tx=iw-(dimension.width*scale);
+    tx=iw-svg_width;
 
-  /* translate to position */
+  // translate to position
   cairo_translate (cr,-roi_in->x,-roi_in->y);
-  cairo_translate (cr,tx,ty);
 
-  /* scale */
-  cairo_scale (cr,scale,scale);
+  // add translation for the given value in GUI (xoffset,yoffset)
+  tx += data->xoffset*wbase;
+  ty += data->yoffset*hbase;
 
-  /* translate x and y offset */
-  cairo_translate (cr,data->xoffset*iw/roi_out->scale,data->yoffset*ih/roi_out->scale);
+  cairo_translate (cr,tx*roi_out->scale,ty*roi_out->scale);
+
+  // now set proper scale for the watermark itself
+  cairo_scale(cr, scale, scale);
 
   /* render svg into surface*/
   dt_pthread_mutex_lock(&darktable.plugin_threadsafe);
@@ -634,9 +760,10 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
   for(int j=0; j<roi_out->height; j++) for(int i=0; i<roi_out->width; i++)
     {
       float alpha = (sd[3]/255.0)*opacity;
-      out[0] = ((1.0-alpha)*in[0]) + (alpha*(sd[2]/255.0));
-      out[1] = ((1.0-alpha)*in[1]) + (alpha*(sd[1]/255.0));
-      out[2] = ((1.0-alpha)*in[2]) + (alpha*(sd[0]/255.0));
+      /* svg uses a premultiplied alpha, so only use opacity for the blending */
+      out[0] = ((1.0-alpha)*in[0]) + (opacity*(sd[2]/255.0));
+      out[1] = ((1.0-alpha)*in[1]) + (opacity*(sd[1]/255.0));
+      out[2] = ((1.0-alpha)*in[2]) + (opacity*(sd[0]/255.0));
       out[3] = in[3];
 
       out+=ch;
@@ -680,11 +807,13 @@ static void refresh_watermarks( dt_iop_module_t *self )
   // check watermarkdir and update combo with entries...
   int count=0;
   const gchar *d_name = NULL;
-  gchar configdir[1024],datadir[1024],filename[2048];
-  dt_loc_get_datadir(datadir, 1024);
-  dt_loc_get_user_config_dir(configdir, 1024);
-  g_strlcat(datadir,"/watermarks",1024);
-  g_strlcat(configdir,"/watermarks",1024);
+  gchar configdir[DT_MAX_PATH_LEN];
+  gchar datadir[DT_MAX_PATH_LEN];
+  gchar filename[DT_MAX_PATH_LEN];
+  dt_loc_get_datadir(datadir, DT_MAX_PATH_LEN);
+  dt_loc_get_user_config_dir(configdir, DT_MAX_PATH_LEN);
+  g_strlcat(datadir,"/watermarks", DT_MAX_PATH_LEN);
+  g_strlcat(configdir,"/watermarks", DT_MAX_PATH_LEN);
 
   /* read watermarks from datadir */
   GDir *dir = g_dir_open(datadir, 0, NULL);
@@ -692,7 +821,7 @@ static void refresh_watermarks( dt_iop_module_t *self )
   {
     while((d_name = g_dir_read_name(dir)))
     {
-      snprintf(filename, 1024, "%s/%s", datadir, d_name);
+      snprintf(filename, DT_MAX_PATH_LEN, "%s/%s", datadir, d_name);
       gtk_combo_box_append_text( g->combobox1, d_name );
       count++;
     }
@@ -705,10 +834,10 @@ static void refresh_watermarks( dt_iop_module_t *self )
   {
     while((d_name = g_dir_read_name(dir)))
     {
-      snprintf(filename, 2048, "%s/%s", configdir, d_name);
+      snprintf(filename, DT_MAX_PATH_LEN, "%s/%s", configdir, d_name);
       gtk_combo_box_append_text( g->combobox1, d_name );
       count++;
-    } 
+    }
     g_dir_close(dir) ;
   }
 
@@ -798,6 +927,17 @@ scale_callback(GtkWidget *slider, gpointer user_data)
   dt_dev_add_history_item(darktable.develop, self, TRUE);
 }
 
+static void
+sizeto_callback(GtkWidget *tb, gpointer user_data)
+{
+  dt_iop_module_t *self = (dt_iop_module_t *)user_data;
+
+  if(darktable.gui->reset) return;
+  dt_iop_watermark_params_t *p = (dt_iop_watermark_params_t *)self->params;
+  p->sizeto = dt_bauhaus_combobox_get(tb);
+  dt_dev_add_history_item(darktable.develop, self, TRUE);
+}
+
 void commit_params (struct dt_iop_module_t *self, dt_iop_params_t *p1, dt_dev_pixelpipe_t *pipe, dt_dev_pixelpipe_iop_t *piece)
 {
   dt_iop_watermark_params_t *p = (dt_iop_watermark_params_t *)p1;
@@ -811,6 +951,7 @@ void commit_params (struct dt_iop_module_t *self, dt_iop_params_t *p1, dt_dev_pi
   d->xoffset= p->xoffset;
   d->yoffset= p->yoffset;
   d->alignment= p->alignment;
+  d->sizeto = p->sizeto;
   memset(d->filename,0,64);
   sprintf(d->filename,"%s",p->filename);
 
@@ -852,6 +993,7 @@ void gui_update(struct dt_iop_module_t *self)
   dt_bauhaus_slider_set(g->scale4, p->yoffset);
   gtk_toggle_button_set_active( GTK_TOGGLE_BUTTON(g->dtba[ p->alignment ]), TRUE);
   _combo_box_set_active_text( g->combobox1, p->filename );
+  dt_bauhaus_combobox_set(g->sizeto, p->sizeto);
 }
 
 void init(dt_iop_module_t *module)
@@ -860,12 +1002,12 @@ void init(dt_iop_module_t *module)
   module->params_size = sizeof(dt_iop_watermark_params_t);
   module->default_params = malloc(sizeof(dt_iop_watermark_params_t));
   module->default_enabled = 0;
-  module->priority = 980; // module order created by iop_dependencies.py, do not edit!
+  module->priority = 963; // module order created by iop_dependencies.py, do not edit!
   module->params_size = sizeof(dt_iop_watermark_params_t);
   module->gui_data = NULL;
   dt_iop_watermark_params_t tmp = (dt_iop_watermark_params_t)
   {
-    100.0,100.0,0.0,0.0,4, {"darktable.svg"}
+    100.0,100.0,0.0,0.0,4,DT_SCALE_IMAGE, {"darktable.svg"}
   }; // opacity,scale,xoffs,yoffs,alignment
   memcpy(module->params, &tmp, sizeof(dt_iop_watermark_params_t));
   memcpy(module->default_params, &tmp, sizeof(dt_iop_watermark_params_t));
@@ -899,17 +1041,26 @@ void gui_init(struct dt_iop_module_t *self)
   gtk_box_pack_start(GTK_BOX(hbox),GTK_WIDGET(label1),TRUE,TRUE,0);
   gtk_box_pack_start(GTK_BOX(hbox),GTK_WIDGET(g->combobox1),TRUE,TRUE,0);
   gtk_box_pack_start(GTK_BOX(hbox),GTK_WIDGET(g->dtbutton1),FALSE,FALSE,0);
-  gtk_box_pack_start(GTK_BOX(vbox), GTK_WIDGET(hbox), TRUE, TRUE, 0);
+  gtk_box_pack_start(GTK_BOX(vbox),GTK_WIDGET(hbox), TRUE, TRUE, 0);
 
   // Add opacity/scale sliders to table
-  g->scale1 = dt_bauhaus_slider_new_with_range(self, 0.0, 100.0, 1.0, p->opacity, 0.5);
+  g->scale1 = dt_bauhaus_slider_new_with_range(self, 0.0, 100.0, 1.0, p->opacity, 0);
   dt_bauhaus_slider_set_format(g->scale1, "%.f%%");
   dt_bauhaus_widget_set_label(g->scale1,_("opacity"));
-  g->scale2 = dt_bauhaus_slider_new_with_range(self, 1.0, 100.0, 1.0, p->scale, 0.5);
+  g->scale2 = dt_bauhaus_slider_new_with_range(self, 1.0, 100.0, 1.0, p->scale, 0);
   dt_bauhaus_slider_set_format(g->scale2, "%.f%%");
   dt_bauhaus_widget_set_label(g->scale2,_("scale"));
   gtk_box_pack_start(GTK_BOX(vbox), GTK_WIDGET(g->scale1), TRUE, TRUE, 0);
   gtk_box_pack_start(GTK_BOX(vbox), GTK_WIDGET(g->scale2), TRUE, TRUE, 0);
+
+  g->sizeto = dt_bauhaus_combobox_new(self);
+  dt_bauhaus_combobox_add(g->sizeto, _("image"));
+  dt_bauhaus_combobox_add(g->sizeto, _("larger border"));
+  dt_bauhaus_combobox_add(g->sizeto, _("smaller border"));
+  dt_bauhaus_combobox_set(g->sizeto, p->sizeto);
+  dt_bauhaus_widget_set_label(g->sizeto,_("scale on"));
+  gtk_box_pack_start(GTK_BOX(vbox), g->sizeto, TRUE, TRUE, 0);
+  g_object_set(G_OBJECT(g->sizeto), "tooltip-text", _("size is relative to"), (char *)NULL);
 
   // Create the 3x3 gtk table toggle button table...
   GtkTable *bat = GTK_TABLE( gtk_table_new(3,3,TRUE));
@@ -959,6 +1110,8 @@ void gui_init(struct dt_iop_module_t *self)
 
   g_signal_connect (G_OBJECT (g->combobox1), "changed",
                     G_CALLBACK (watermark_callback), self);
+  g_signal_connect (G_OBJECT (g->sizeto), "value-changed",
+                    G_CALLBACK (sizeto_callback), self);
 }
 
 void gui_cleanup(struct dt_iop_module_t *self)

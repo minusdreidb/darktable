@@ -42,6 +42,9 @@
 #define DT_IS_BAUHAUS_WIDGET_CLASS(obj)    (G_TYPE_CHECK_CLASS_TYPE ((obj), DT_BAUHAUS_WIDGET_TYPE))
 #define DT_BAUHAUS_WIDGET_GET_CLASS        (G_TYPE_INSTANCE_GET_CLASS ((obj), DT_BAUHAUS_WIDGET_TYPE, DtBauausWidgetClass))
 
+#define DT_BAUHAUS_SLIDER_VALUE_CHANGED_DELAY_MAX     500
+#define DT_BAUHAUS_SLIDER_VALUE_CHANGED_DELAY_MIN     25
+
 typedef enum dt_bauhaus_type_t
 {
   DT_BAUHAUS_SLIDER = 1,
@@ -65,6 +68,10 @@ typedef struct dt_bauhaus_slider_data_t
   float grad_pos[10];    // and position of these.
 
   char format[24];// numeric value is printed with this string
+
+  int   is_dragging;     // indicates is mouse is dragging slider 
+  int   is_changed;      // indicates new data
+  guint timeout_handle; // used to store id of timout routine
 }
 dt_bauhaus_slider_data_t;
 
@@ -140,8 +147,14 @@ typedef struct dt_bauhaus_t
   GtkWidget *popup_area;
   // are set by the motion notification, to be used during drawing.
   float mouse_x, mouse_y;
+  // time when the popup window was opened. this is sortof a hack to
+  // detect `double clicks between windows' to reset the combobox.
+  double opentime;
   // pointer position when popup window is closed
   float end_mouse_x, end_mouse_y;
+  // used to determine whether the user crossed the line already.
+  int change_active;
+  float mouse_line_distance;
   // key input buffer
   char keys[64];
   int keys_cnt;
@@ -205,6 +218,7 @@ void dt_bauhaus_slider_set(GtkWidget *w, float pos);
 float dt_bauhaus_slider_get(GtkWidget *w);
 void dt_bauhaus_slider_set_format(GtkWidget *w, const char *format);
 void dt_bauhaus_slider_set_stop(GtkWidget *widget, float stop, float r, float g, float b);
+void dt_bauhaus_slider_set_default(GtkWidget *widget, float def);
 
 // combobox:
 GtkWidget* dt_bauhaus_combobox_new(dt_iop_module_t *self);
@@ -217,6 +231,7 @@ void dt_bauhaus_combobox_set_text(GtkWidget *w, const char *text);
 int  dt_bauhaus_combobox_get(GtkWidget *w);
 const GList* dt_bauhaus_combobox_get_labels(GtkWidget *w);
 void dt_bauhaus_combobox_clear(GtkWidget *w);
+void dt_bauhaus_combobox_set_default(GtkWidget *widget, int def);
 
 // key accel parsing:
 // execute a line of input

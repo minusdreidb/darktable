@@ -22,6 +22,7 @@
 #include <tiffio.h>
 #include "common/darktable.h"
 #include "common/imageio_module.h"
+#include "common/imageio.h"
 #include "common/exif.h"
 #include "common/colorspaces.h"
 #include "control/conf.h"
@@ -33,6 +34,7 @@ typedef struct dt_imageio_tiff_t
 {
   int max_width, max_height;
   int width, height;
+  char style[128];
   int bpp;
   TIFF *handle;
 }
@@ -210,6 +212,11 @@ int bpp(dt_imageio_tiff_t *p)
   return p->bpp;
 }
 
+int levels(dt_imageio_tiff_t *p)
+{
+  return IMAGEIO_RGB | (p->bpp == 8 ? IMAGEIO_INT8 : IMAGEIO_INT16);
+}
+
 const char*
 mime(dt_imageio_module_data_t *data)
 {
@@ -219,7 +226,7 @@ mime(dt_imageio_module_data_t *data)
 const char*
 extension(dt_imageio_module_data_t *data)
 {
-  return "tiff";
+  return "tif";
 }
 
 const char*
@@ -266,6 +273,11 @@ void gui_cleanup (dt_imageio_module_format_t *self)
 void gui_reset   (dt_imageio_module_format_t *self)
 {
   // TODO: reset to conf? reset to factory defaults?
+}
+
+int flags(dt_imageio_module_data_t *data)
+{
+  return FORMAT_FLAGS_SUPPORT_XMP;
 }
 
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh

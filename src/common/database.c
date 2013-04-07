@@ -1,6 +1,7 @@
 /*
     This file is part of darktable,
     copyright (c) 2011 henrik andersson.
+    copyright (c) 2012 tobias ellinghaus.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -29,6 +30,7 @@
 typedef struct dt_database_t
 {
   gboolean is_new_database;
+  gboolean already_locked;
 
   /* database filename */
   gchar *dbfilename;
@@ -59,22 +61,25 @@ dt_database_t *dt_database_init(char *alternative)
 
   /* lets construct the db filename  */
   gchar * dbname = NULL;
-  gchar dbfilename[1024] = {0};
-  gchar datadir[1024] = {0};
+  gchar dbfilename[DT_MAX_PATH_LEN] = {0};
+  gchar datadir[DT_MAX_PATH_LEN] = {0};
 
-  dt_loc_get_user_config_dir(datadir, 1024);
+  dt_loc_get_user_config_dir(datadir, DT_MAX_PATH_LEN);
 
   if ( alternative == NULL )
   {
     dbname = dt_conf_get_string ("database");
-    if(!dbname)               snprintf(dbfilename, 1024, "%s/library.db", datadir);
-    else if(dbname[0] != '/') snprintf(dbfilename, 1024, "%s/%s", datadir, dbname);
-    else                      snprintf(dbfilename, 1024, "%s", dbname);
+    if(!dbname)               snprintf(dbfilename, DT_MAX_PATH_LEN, "%s/library.db", datadir);
+    else if(dbname[0] != '/') snprintf(dbfilename, DT_MAX_PATH_LEN, "%s/%s", datadir, dbname);
+    else                      snprintf(dbfilename, DT_MAX_PATH_LEN, "%s", dbname);
   }
   else
   {
-    snprintf(dbfilename, 1024, "%s", alternative);
-    dbname = g_file_get_basename (g_file_new_for_path(alternative));
+    snprintf(dbfilename, DT_MAX_PATH_LEN, "%s", alternative);
+
+    GFile *galternative = g_file_new_for_path(alternative);
+    dbname = g_file_get_basename (galternative);
+    g_object_unref(galternative);
   }
 
   /* create database */
@@ -84,7 +89,7 @@ dt_database_t *dt_database_init(char *alternative)
   db->is_new_database = FALSE;
 
   /* test if databasefile is available */
-  if(!g_file_test(dbfilename, G_FILE_TEST_IS_REGULAR)) 
+  if(!g_file_test(dbfilename, G_FILE_TEST_IS_REGULAR))
     db->is_new_database = TRUE;
 
   /* opening / creating database */
@@ -96,16 +101,27 @@ dt_database_t *dt_database_init(char *alternative)
     fprintf(stderr, "[init] maybe your %s/darktablerc is corrupt?\n",datadir);
     dt_loc_get_datadir(dbfilename, 512);
     fprintf(stderr, "[init] try `cp %s/darktablerc %s/darktablerc'\n", dbfilename,datadir);
+    sqlite3_close(db->handle);
     g_free(dbname);
     g_free(db);
     return NULL;
+  }
+
+  /* having more than one instance of darktable using the same database is a bad idea */
+  if(sqlite3_exec(db->handle, "delete from lock", NULL, NULL, NULL) > SQLITE_ERROR)
+  {
+    fprintf(stderr, "[init] database is locked, probably another process is already using it\n");
+    sqlite3_close(db->handle);
+    g_free(dbname);
+    db->already_locked = TRUE;
+    return db;
   }
 
   /* attach a memory database to db connection for use with temporary tables
      used during instance life time, which is discarded on exit.
   */
   sqlite3_exec(db->handle, "attach database ':memory:' as memory",NULL,NULL,NULL);
-  
+
   sqlite3_exec(db->handle, "PRAGMA synchronous = OFF", NULL, NULL, NULL);
   sqlite3_exec(db->handle, "PRAGMA journal_mode = MEMORY", NULL, NULL, NULL);
   sqlite3_exec(db->handle, "PRAGMA page_size = 32768", NULL, NULL, NULL);
@@ -132,25 +148,25 @@ const gchar *dt_database_get_path(const struct dt_database_t *db)
 
 static void _database_migrate_to_xdg_structure()
 {
-  gchar dbfilename[2048]= {0};
+  gchar dbfilename[DT_MAX_PATH_LEN]= {0};
   gchar *conf_db = dt_conf_get_string("database");
-  
-  gchar datadir[1024] = {0};
-  dt_loc_get_datadir(datadir, 1024);
-  
+
+  gchar datadir[DT_MAX_PATH_LEN] = {0};
+  dt_loc_get_datadir(datadir, DT_MAX_PATH_LEN);
+
   if (conf_db && conf_db[0] != '/')
   {
     char *homedir = getenv ("HOME");
-    snprintf (dbfilename,2048,"%s/%s", homedir, conf_db);
+    snprintf (dbfilename,DT_MAX_PATH_LEN,"%s/%s", homedir, conf_db);
     if (g_file_test (dbfilename, G_FILE_TEST_EXISTS))
     {
       fprintf(stderr, "[init] moving database into new XDG directory structure\n");
-      char destdbname[2048]= {0};
-      snprintf(destdbname,2048,"%s/%s",datadir,"library.db");
+      char destdbname[DT_MAX_PATH_LEN]= {0};
+      snprintf(destdbname,DT_MAX_PATH_LEN,"%s/%s",datadir,"library.db");
       if(!g_file_test (destdbname,G_FILE_TEST_EXISTS))
       {
-	rename(dbfilename,destdbname);
-	dt_conf_set_string("database","library.db");
+        rename(dbfilename,destdbname);
+        dt_conf_set_string("database","library.db");
       }
     }
   }
@@ -164,21 +180,26 @@ static void _database_delete_mipmaps_files()
   /* This migration is intended to be run only from 0.9.x to new cache in 1.0 */
 
   // Directory
-  char cachedir[1024], mipmapfilename[1024];
+  char cachedir[DT_MAX_PATH_LEN], mipmapfilename[DT_MAX_PATH_LEN];
   dt_loc_get_user_cache_dir(cachedir, sizeof(cachedir));
 
-  snprintf(mipmapfilename, 1024, "%s/mipmaps", cachedir);
+  snprintf(mipmapfilename, DT_MAX_PATH_LEN, "%s/mipmaps", cachedir);
 
   if(access(mipmapfilename, F_OK) != -1)
   {
     fprintf(stderr, "[mipmap_cache] dropping old version file: %s\n", mipmapfilename);
     unlink(mipmapfilename);
 
-    snprintf(mipmapfilename, 1024, "%s/mipmaps.fallback", cachedir);
-    
+    snprintf(mipmapfilename, DT_MAX_PATH_LEN, "%s/mipmaps.fallback", cachedir);
+
     if(access(mipmapfilename, F_OK) != -1)
       unlink(mipmapfilename);
   }
+}
+
+gboolean dt_database_get_already_locked(const dt_database_t *db)
+{
+  return db->already_locked;
 }
 
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh

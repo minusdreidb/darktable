@@ -25,6 +25,7 @@
 <xsl:param name="chapter.autolabel" select="1"></xsl:param>
 <xsl:param name="section.autolabel" select="1"></xsl:param>
 <xsl:param name="section.autolabel.max.depth">3</xsl:param>
+<xsl:param name="section.label.includes.component.label" select="1"></xsl:param>
 
 <xsl:attribute-set name="formal.title.properties">
     <xsl:attribute name="font-size">
@@ -72,13 +73,20 @@
 
   <xsl:attribute-set name="section.title.level4.properties">
     <xsl:attribute name="font-size">
+      <xsl:value-of select="$body.font.master * 1.1"/>
+      <xsl:text>pt</xsl:text>
+    </xsl:attribute>
+  </xsl:attribute-set>
+
+  <xsl:attribute-set name="section.title.level5.properties">
+    <xsl:attribute name="font-size">
       <xsl:value-of select="$body.font.master * 0.9"/>
       <xsl:text>pt</xsl:text>
     </xsl:attribute>  
      <xsl:attribute name="start-indent">0.25in</xsl:attribute>
   </xsl:attribute-set> 
 
-  <xsl:attribute-set name="section.title.level5.properties">
+  <xsl:attribute-set name="section.title.level6.properties">
     <xsl:attribute name="font-size">
       <xsl:value-of select="$body.font.master * 0.8"/>
       <xsl:text>pt</xsl:text>

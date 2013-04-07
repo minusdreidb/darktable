@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 2.6)
 include_directories("${CMAKE_CURRENT_BINARY_DIR}/../" "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # The modules
-set(MODULES import export copy_history styles tagging image select collect recentcollect metadata metadata_view navigation histogram history snapshots modulelist modulegroups backgroundjobs colorpicker similarity keywords hinter)
+set(MODULES import export copy_history styles tagging image select collect recentcollect metadata metadata_view navigation histogram history snapshots modulelist modulegroups backgroundjobs colorpicker keywords hinter)
 
 # The tools
 set(MODULES ${MODULES} viewswitcher)
@@ -30,7 +30,6 @@ add_library(select MODULE "select.c")
 add_library(collect MODULE "collect.c")
 add_library(recentcollect MODULE "recentcollect.c")
 add_library(metadata MODULE "metadata.c")
-add_library(similarity MODULE "similarity.c")
 add_library(metadata_view MODULE "metadata_view.c")
 add_library(navigation MODULE "navigation.c")
 add_library(histogram MODULE "histogram.c")
@@ -76,6 +75,20 @@ if(GPHOTO2_FOUND)
 	set(MODULES ${MODULES} capture camera live_view)
 endif(GPHOTO2_FOUND)
 
+# the modules specific to map mode
+if(USE_GEO)
+	add_library(location MODULE "location.c")
+	add_library(map_settings MODULE "map_settings.c")
+	set(MODULES ${MODULES} location map_settings)
+endif(USE_GEO)
+
+if(Glib_PKGCONF_VERSION VERSION_EQUAL  "2.26.0" OR Glib_PKGCONF_VERSION VERSION_GREATER "2.26.0")
+	add_library(geotagging MODULE "geotagging.c")
+	set(MODULES ${MODULES} geotagging)
+else()
+	message(STATUS "glib version ${Glib_PKGCONF_VERSION} found. you need at least 2.26.0 to compile the geotagging module.")
+endif()
+
 # Add libs references
 foreach(module ${MODULES})
 	target_link_libraries(${module} ${LIBS})
@@ -83,7 +96,7 @@ endforeach(module)
 
 # Add installation target for each module
 # TODO: Modules are now not only lighttable related and should be placed
-#       in a better matching structure then just in lighttable directory. 
+#       in a better matching structure then just in lighttable directory.
 foreach(module ${MODULES})
 	install(TARGETS  ${module} DESTINATION ${LIB_INSTALL}/darktable/plugins/lighttable)
 endforeach(module)

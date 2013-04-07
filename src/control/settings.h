@@ -62,6 +62,7 @@ typedef enum dt_ctl_gui_mode_t
   DT_LIBRARY = 0,
   DT_DEVELOP = 1,
   DT_CAPTURE = 2,
+  DT_MAP = 3,
   DT_MODE_NONE = 4
 }
 dt_ctl_gui_mode_t;
@@ -134,8 +135,6 @@ typedef struct dt_ctl_settings_t
   int dev_closeup;
 }
 dt_ctl_settings_t;
-
-enum dt_dev_zoom_t;
 
 #endif
 

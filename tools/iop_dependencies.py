@@ -40,19 +40,25 @@ def add_edges(gr):
   
   # these work on mosaic data:
   gr.add_edge(('demosaic', 'rawspeed'))
-  gr.add_edge(('demosaic', 'temperature'))
+  # handle highlights correctly:
+  # we want highlights as early as possible, to avoid
+  # pink highlights in plugins (happens only before highlight clipping)
+  gr.add_edge(('demosaic', 'highlights'))
   gr.add_edge(('demosaic', 'hotpixels'))
   gr.add_edge(('demosaic', 'rawdenoise'))
   gr.add_edge(('demosaic', 'cacorrect'))
+
+  # highlights come directly after whitebalance
+  gr.add_edge(('highlights', 'temperature'))
   
   # cacorrect works better on undenoised data:
   gr.add_edge(('hotpixels', 'cacorrect'))
   gr.add_edge(('rawdenoise', 'cacorrect'))
   
-  # all these need white balanced input:
-  gr.add_edge(('rawdenoise', 'temperature'))
-  gr.add_edge(('hotpixels', 'temperature'))
-  gr.add_edge(('cacorrect', 'temperature'))
+  # all these need white balanced and clipped input:
+  gr.add_edge(('rawdenoise', 'highlights'))
+  gr.add_edge(('hotpixels', 'highlights'))
+  gr.add_edge(('cacorrect', 'highlights'))
   
   # and of course rawspeed needs to give us the pixels first:
   gr.add_edge(('temperature', 'rawspeed'))
@@ -68,6 +74,10 @@ def add_edges(gr):
   gr.add_edge(('colorin', 'lens'))
   gr.add_edge(('colorin', 'profile_gamma'))
   gr.add_edge(('colorin', 'shrecovery'))
+
+  # very linear:
+  gr.add_edge(('basecurve', 'lens'))
+  gr.add_edge(('basecurve', 'exposure'))
   
   # flip is a distortion plugin, and as such has to go after spot removal
   # and lens correction, which depend on original input buffers.
@@ -79,16 +89,6 @@ def add_edges(gr):
   gr.add_edge(('clipping', 'flip'))
   gr.add_edge(('graduatednd', 'flip'))
   gr.add_edge(('vignette', 'flip'))
-  # handle highlights correctly:
-  # we want highlights as early as possible, to avoid
-  # pink highlights in plugins (happens only before highlight clipping)
-  gr.add_edge(('highlights', 'demosaic'))
-  gr.add_edge(('exposure', 'highlights'))
-  gr.add_edge(('graduatednd', 'highlights'))
-  gr.add_edge(('basecurve', 'highlights'))
-  gr.add_edge(('lens', 'highlights'))
-  gr.add_edge(('tonemap', 'highlights'))
-  gr.add_edge(('shrecovery', 'highlights'))
   # gives the ability to change the space of shadow recovery fusion.
   # maybe this has to go the other way round, let's see what experience shows!
   gr.add_edge(('shrecovery', 'basecurve'))
@@ -102,12 +102,14 @@ def add_edges(gr):
   gr.add_edge(('profile_gamma', 'lens'))
   gr.add_edge(('profile_gamma', 'shrecovery'))
   gr.add_edge(('profile_gamma', 'bilateral'))
+  gr.add_edge(('profile_gamma', 'denoiseprofile'))
   
   # these need Lab (between color in/out): 
   gr.add_edge(('colorout', 'bloom'))
   gr.add_edge(('colorout', 'nlmeans'))
   gr.add_edge(('colorout', 'colortransfer'))
   gr.add_edge(('colorout', 'atrous'))
+  gr.add_edge(('colorout', 'bilat'))
   gr.add_edge(('colorout', 'colorzones'))
   gr.add_edge(('colorout', 'lowlight'))
   gr.add_edge(('colorout', 'monochrome'))
@@ -128,6 +130,7 @@ def add_edges(gr):
   gr.add_edge(('nlmeans', 'colorin'))
   gr.add_edge(('colortransfer', 'colorin'))
   gr.add_edge(('atrous', 'colorin'))
+  gr.add_edge(('bilat', 'colorin'))
   gr.add_edge(('colorzones', 'colorin'))
   gr.add_edge(('lowlight', 'colorin'))
   gr.add_edge(('monochrome', 'colorin'))
@@ -169,6 +172,7 @@ def add_edges(gr):
   gr.add_edge(('colorcorrection', 'monochrome'))
   
   # want to enhance detail/local contrast/sharpen denoised images:
+  gr.add_edge(('bilat', 'nlmeans'))
   gr.add_edge(('atrous', 'nlmeans'))
   gr.add_edge(('sharpen', 'nlmeans'))
   gr.add_edge(('anlfyeni', 'nlmeans'))
@@ -197,6 +201,7 @@ def add_edges(gr):
   gr.add_edge(('gamma', 'watermark'))
   gr.add_edge(('gamma', 'overexposed'))
   gr.add_edge(('gamma', 'borders'))
+  gr.add_edge(('gamma', 'dither'))
   gr.add_edge(('channelmixer', 'colorout'))
   gr.add_edge(('clahe', 'colorout'))
   gr.add_edge(('velvia', 'colorout'))
@@ -205,6 +210,7 @@ def add_edges(gr):
   gr.add_edge(('splittoning', 'colorout'))
   gr.add_edge(('watermark', 'colorout'))
   gr.add_edge(('overexposed', 'colorout'))
+  gr.add_edge(('dither', 'colorout'))
   
   # borders should not change shape/color:
   gr.add_edge(('borders', 'colorout'))
@@ -219,6 +225,9 @@ def add_edges(gr):
 
   # but watermark can be drawn on top of borders
   gr.add_edge(('watermark', 'borders'))
+
+  # want dithering very late
+  gr.add_edge(('dither', 'watermark'))
   
   # want to sharpen after geometric transformations:
   gr.add_edge(('sharpen', 'clipping'))
@@ -240,6 +249,17 @@ def add_edges(gr):
   # need demosaiced data, but not Lab:
   gr.add_edge(('tonemap', 'demosaic'))
   gr.add_edge(('colorin', 'tonemap'))
+  # global variant is Lab:
+  gr.add_edge(('globaltonemap', 'colorin'))
+  gr.add_edge(('colorout', 'globaltonemap'))
+  # we want it to first tonemap, then adjust contrast:
+  gr.add_edge(('tonecurve', 'globaltonemap'))
+  gr.add_edge(('colorcorrection', 'globaltonemap'))
+  gr.add_edge(('levels', 'globaltonemap'))
+  gr.add_edge(('atrous', 'globaltonemap'))
+  gr.add_edge(('shadhi', 'globaltonemap'))
+  gr.add_edge(('zonesystem', 'globaltonemap'))
+  gr.add_edge(('bilat', 'globaltonemap'))
   
   # want to fine-tune stuff after injection of color transfer:
   gr.add_edge(('atrous', 'colortransfer'))
@@ -275,6 +295,17 @@ def add_edges(gr):
   # the bilateral filter, in linear input rgb
   gr.add_edge(('colorin', 'bilateral'))
   gr.add_edge(('bilateral', 'demosaic'))
+  # same for denoise based on noise profiles.
+  # also avoid any noise confusion potentially caused
+  # by distortions/averages or exposure gain.
+  gr.add_edge(('colorin', 'denoiseprofile'))
+  gr.add_edge(('denoiseprofile', 'demosaic'))
+  gr.add_edge(('basecurve', 'denoiseprofile'))
+  gr.add_edge(('lens', 'denoiseprofile'))
+  gr.add_edge(('exposure', 'denoiseprofile'))
+  gr.add_edge(('graduatednd', 'denoiseprofile'))
+  gr.add_edge(('tonemap', 'denoiseprofile'))
+
   gr.add_edge(('colorout', 'equalizer'))
   # for smooth b/w images, we want chroma denoise to go before
   # color zones, where chrome can affect luma:
@@ -288,6 +319,7 @@ gr.add_nodes([
 'atrous',
 'basecurve',
 'bilateral',
+'bilat',
 'bloom',
 'borders',
 'cacorrect',
@@ -302,10 +334,13 @@ gr.add_nodes([
 'colorzones',
 'colorcontrast',
 'demosaic',
+'denoiseprofile',
+'dither',
 'equalizer', # deprecated
 'exposure',
 'flip',
 'gamma',
+'globaltonemap',
 'graduatednd',
 'grain',
 'highlights',

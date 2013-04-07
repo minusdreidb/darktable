@@ -19,6 +19,7 @@
 #include "common/darktable.h"
 #include "common/exif.h"
 #include "common/colorspaces.h"
+#include "common/imageio.h"
 #include "common/imageio_module.h"
 #include "common/imageio_exr.h"
 #include "common/imageio_exr.hh"
@@ -46,10 +47,11 @@ extern "C"
   {
     int max_width, max_height;
     int width, height;
+    char style[128];
   }
   dt_imageio_exr_t;
- 
-  void init(dt_imageio_module_format_t *self) 
+
+  void init(dt_imageio_module_format_t *self)
   {
     Imf::BlobAttribute::registerAttributeType();
   }
@@ -58,9 +60,7 @@ extern "C"
 
   int write_image (dt_imageio_exr_t *exr, const char *filename, const float *in, void *exif, int exif_len, int imgid)
   {
-    Imf::Blob exif_blob;
-    exif_blob.size=exif_len;
-    exif_blob.data=(uint8_t *)exif;
+    Imf::Blob exif_blob(exif_len, (uint8_t*)exif);
     Imf::Header header(exr->width,exr->height,1,Imath::V2f (0, 0),1,Imf::INCREASING_Y,Imf::PIZ_COMPRESSION);
     header.insert("comment",Imf::StringAttribute("Developed using Darktable "PACKAGE_VERSION));
     header.insert("exif", Imf::BlobAttribute(exif_blob));
@@ -107,6 +107,7 @@ extern "C"
   {
     *size = sizeof(dt_imageio_module_data_t);
     dt_imageio_exr_t *d = (dt_imageio_exr_t *)malloc(sizeof(dt_imageio_exr_t));
+  memset(d,0,sizeof(dt_imageio_exr_t));
     return d;
   }
 
@@ -126,6 +127,11 @@ extern "C"
   int bpp(dt_imageio_module_data_t *p)
   {
     return 32;
+  }
+
+  int levels(dt_imageio_module_data_t *p)
+  {
+    return IMAGEIO_RGB|IMAGEIO_FLOAT;
   }
 
   const char*

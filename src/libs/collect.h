@@ -28,9 +28,11 @@ dt_lib_collect_mode_t;
 const char *dt_lib_collect_string[] =
 {
   N_("film roll"),
+  N_("folders"),
   N_("camera"),
   N_("tag"),
   N_("date"),
+  N_("time"),
   N_("history"),
   N_("color label"),
   N_("title"),
@@ -43,7 +45,7 @@ const char *dt_lib_collect_string[] =
   N_("aperture"),
   N_("filename")
 };
-const int dt_lib_collect_string_cnt = 15;
+const int dt_lib_collect_string_cnt = 17;
 
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
 // vim: shiftwidth=2 expandtab tabstop=2 cindent

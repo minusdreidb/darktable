@@ -221,7 +221,7 @@ void init(dt_iop_module_t *module)
   module->params = malloc(sizeof(dt_iop_colorcorrection_params_t));
   module->default_params = malloc(sizeof(dt_iop_colorcorrection_params_t));
   module->default_enabled = 0;
-  module->priority = 666; // module order created by iop_dependencies.py, do not edit!
+  module->priority = 672; // module order created by iop_dependencies.py, do not edit!
   module->params_size = sizeof(dt_iop_colorcorrection_params_t);
   module->gui_data = NULL;
   dt_iop_colorcorrection_params_t tmp = (dt_iop_colorcorrection_params_t)
@@ -261,8 +261,8 @@ void gui_init(struct dt_iop_module_t *self)
   gtk_container_add(GTK_CONTAINER(asp), GTK_WIDGET(g->area));
   gtk_drawing_area_size(g->area, 258, 258);
   g_object_set (GTK_OBJECT(g->area), "tooltip-text", _("drag the line for split toning. "
-        "bright means highlights, dark means shadows. "
-        "use mouse wheel to change saturation."), (char *)NULL);
+                "bright means highlights, dark means shadows. "
+                "use mouse wheel to change saturation."), (char *)NULL);
 
   gtk_widget_add_events(GTK_WIDGET(g->area), GDK_POINTER_MOTION_MASK | GDK_POINTER_MOTION_HINT_MASK | GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK | GDK_LEAVE_NOTIFY_MASK);
   g_signal_connect (G_OBJECT (g->area), "expose-event",
@@ -411,11 +411,11 @@ dt_iop_colorcorrection_motion_notify(GtkWidget *widget, GdkEventMotion *event, g
   else
   {
     g->selected = 0;
-    const float thrs = 10.0f;
+    const float thrs = 5.0f;
     const float distlo = (p->loa-ma)*(p->loa-ma) + (p->lob-mb)*(p->lob-mb);
     const float disthi = (p->hia-ma)*(p->hia-ma) + (p->hib-mb)*(p->hib-mb);
-    if(distlo < thrs*thrs) g->selected = 1;
-    else if(disthi < thrs*thrs) g->selected = 2;
+    if(distlo < thrs*thrs && distlo < disthi) g->selected = 1;
+    else if(disthi < thrs*thrs && disthi <= distlo) g->selected = 2;
   }
   gtk_widget_queue_draw(self->widget);
   return TRUE;
@@ -428,10 +428,25 @@ dt_iop_colorcorrection_button_press(GtkWidget *widget, GdkEventButton *event, gp
   {
     // double click resets:
     dt_iop_module_t *self = (dt_iop_module_t *)user_data;
+    dt_iop_colorcorrection_gui_data_t *g = (dt_iop_colorcorrection_gui_data_t *)self->gui_data;
     dt_iop_colorcorrection_params_t *p = (dt_iop_colorcorrection_params_t *)self->params;
-    dt_iop_colorcorrection_params_t *d = (dt_iop_colorcorrection_params_t *)self->factory_params;
-    memcpy(p, d, sizeof(*p));
-    dt_dev_add_history_item(darktable.develop, self, TRUE);
+    switch(g->selected)
+    {
+      case 1:  // only reset lo
+        p->loa = p->lob = 0.0;
+        dt_dev_add_history_item(darktable.develop, self, TRUE);
+        break;
+      case 2:  // only reset hi
+        p->hia = p->hib = 0.0;
+        dt_dev_add_history_item(darktable.develop, self, TRUE);
+        break;
+      default: // reset everything
+      {
+        dt_iop_colorcorrection_params_t *d = (dt_iop_colorcorrection_params_t *)self->default_params;
+        memcpy(p, d, sizeof(*p));
+        dt_dev_add_history_item(darktable.develop, self, TRUE);
+      }
+    }
     return TRUE;
   }
   return FALSE;

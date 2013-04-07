@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2011 ulrich pegelow.
+    copyright (c) 2011-2012 ulrich pegelow.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -15,6 +15,9 @@
     You should have received a copy of the GNU General Public License
     along with darktable.  If not, see <http://www.gnu.org/licenses/>.
 */
+
+#include "common.h"
+#include "colorspace.cl"
 
 
 #define DEVELOP_BLEND_MASK_FLAG				0x80
@@ -40,16 +43,9 @@
 #define DEVELOP_BLEND_COLOR				0x13
 #define DEVELOP_BLEND_INVERSE				0x14
 #define DEVELOP_BLEND_UNBOUNDED                         0x15
+#define DEVELOP_BLEND_COLORADJUST                       0x16
 
 #define BLEND_ONLY_LIGHTNESS				8
-
-
-#ifndef M_PI
-#define M_PI           3.14159265358979323846  // should be defined by the OpenCL compiler acc. to standard
-#endif
-
-
-const sampler_t sampleri =  CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
 
 
 typedef enum iop_cs_t 
@@ -105,120 +101,13 @@ dt_develop_blendif_channels_t;
 
 
 
-float4 RGB_2_HSL(float4 RGB)
-{
-  float H, S, L;
-
-  // assumes that each channel is scaled to [0; 1]
-  float R = RGB.x;
-  float G = RGB.y;
-  float B = RGB.z;
-
-  float var_Min = fmin(R, fmin(G, B));
-  float var_Max = fmax(R, fmax(G, B));
-  float del_Max = var_Max - var_Min;
-
-  L = (var_Max + var_Min) / 2.0f;
-
-  if (del_Max == 0.0f)
-  {
-    H = 0.0f;
-    S = 0.0f;
-  }
-  else
-  {
-    S = (L < 0.5f) ? del_Max / (var_Max + var_Min) : del_Max / (2.0f - var_Max - var_Min);
-
-    float del_R = (((var_Max - R) / 6.0f) + (del_Max / 2.0f)) / del_Max;
-    float del_G = (((var_Max - G) / 6.0f) + (del_Max / 2.0f)) / del_Max;
-    float del_B = (((var_Max - B) / 6.0f) + (del_Max / 2.0f)) / del_Max;
-
-    if      (R == var_Max) H = del_B - del_G;
-    else if (G == var_Max) H = (1.0f / 3.0f) + del_R - del_B;
-    else if (B == var_Max) H = (2.0f / 3.0f) + del_G - del_R;
-
-    H = (H < 0.0f) ? H + 1.0f : H;
-    H = (H > 1.0f) ? H - 1.0f : H;
-  }
-
-  return (float4)(H, S, L, RGB.w);
-}
-
-
-float Hue_2_RGB(float v1, float v2, float vH)
-{
-  vH = (vH < 0.0f) ? vH + 1.0f : vH;
-  vH = (vH > 1.0f) ? vH - 1.0f : vH;
-
-  if ((6.0f * vH) < 1.0f) return (v1 + (v2 - v1) * 6.0f * vH);
-  if ((2.0f * vH) < 1.0f) return (v2);
-  if ((3.0f * vH) < 2.0f) return (v1 + (v2 - v1) * ((2.0f / 3.0f) - vH) * 6.0f);
-
-  return (v1);
-}
-
-
-float4 HSL_2_RGB(float4 HSL)
-{
-  float R, G, B;
-
-  float H = HSL.x;
-  float S = HSL.y;
-  float L = HSL.z;
-
-  float var_1, var_2;
-
-  if (S == 0.0f)
-  {
-    R = B = G = L;
-  }
-  else
-  {
-    var_2 = (L < 0.5f) ? L * (1.0f + S) : (L + S) - (S * L);
-
-    var_1 = 2.0f * L - var_2;
-
-    R = Hue_2_RGB(var_1, var_2, H + (1.0f / 3.0f)); 
-    G = Hue_2_RGB(var_1, var_2, H);
-    B = Hue_2_RGB(var_1, var_2, H - (1.0f / 3.0f));
-  } 
-
-  // returns RGB scaled to [0; 1] for each channel
-  return (float4)(R, G, B, HSL.w);
-}
-
-
-float4 Lab_2_LCH(float4 Lab)
-{
-  float H = atan2(Lab.z, Lab.y);
-
-  H = (H > 0.0f) ? H / (2.0f*M_PI) : 1.0f - fabs(H) / (2.0f*M_PI);
-
-  float L = Lab.x;
-  float C = sqrt(Lab.y*Lab.y + Lab.z*Lab.z);
-
-  return (float4)(L, C, H, Lab.w);
-}
-
-
-float4 LCH_2_Lab(float4 LCH)
-{
-  float L = LCH.x;
-  float a = cos(2.0f*M_PI*LCH.z) * LCH.y;
-  float b = sin(2.0f*M_PI*LCH.z) * LCH.y;
-
-  return (float4)(L, a, b, LCH.w);
-}
-
-
-
 float
 blendif_factor_Lab(const float4 input, const float4 output, const unsigned int blendif, global const float *parameters)
 {
   float result = 1.0f;
   float scaled[DEVELOP_BLENDIF_SIZE];
 
-  if((blendif & (1<<DEVELOP_BLENDIF_active)) == 0) return 1.0f;
+  if((blendif & (1u<<DEVELOP_BLENDIF_active)) == 0) return 1.0f;
 
   scaled[DEVELOP_BLENDIF_L_in] = clamp(input.x / 100.0f, 0.0f, 1.0f);			// L scaled to 0..1
   scaled[DEVELOP_BLENDIF_A_in] = clamp((input.y + 128.0f)/256.0f, 0.0f, 1.0f);		// a scaled to 0..1
@@ -282,7 +171,7 @@ blendif_factor_rgb(const float4 input, const float4 output, const unsigned int b
   float result = 1.0f;
   float scaled[DEVELOP_BLENDIF_SIZE];
 
-  if((blendif & (1<<DEVELOP_BLENDIF_active)) == 0) return 1.0f;
+  if((blendif & (1u<<DEVELOP_BLENDIF_active)) == 0) return 1.0f;
 
   scaled[DEVELOP_BLENDIF_GRAY_in]  = clamp(0.3f*input.x + 0.59f*input.y + 0.11f*input.z, 0.0f, 1.0f);	// Gray scaled to 0..1
   scaled[DEVELOP_BLENDIF_RED_in]   = clamp(input.x, 0.0f, 1.0f);						// Red
@@ -341,11 +230,81 @@ blendif_factor_rgb(const float4 input, const float4 output, const unsigned int b
   return result;
 }
 
+__kernel void
+blendop_mask_Lab (__read_only image2d_t in_a, __read_only image2d_t in_b, __write_only image2d_t mask, const int width, const int height, 
+             const float gopacity, const int blendif, global const float *blendif_parameters)
+{
+  const int x = get_global_id(0);
+  const int y = get_global_id(1);
 
+  if(x >= width || y >= height) return;
+
+  float4 a = read_imagef(in_a, sampleri, (int2)(x, y));
+  float4 b = read_imagef(in_b, sampleri, (int2)(x, y));
+
+  float opacity = gopacity * blendif_factor_Lab(a, b, blendif, blendif_parameters);
+
+  write_imagef(mask, (int2)(x, y), opacity);
+}
+
+#if 0
+__kernel void
+blendop_mask_RAW (__read_only image2d_t in_a, __read_only image2d_t in_b, __write_only image2d_t mask, const int width, const int height, 
+             const float gopacity, const int blendif, global const float *blendif_parameters)
+{
+  const int x = get_global_id(0);
+  const int y = get_global_id(1);
+
+  if(x >= width || y >= height) return;
+
+  write_imagef(mask, (int2)(x, y), gopacity);
+}
+#else
+// the following is a workaround for a current bug (as of Nov. 2012) in NVIDIA's OpenCL compiler, affecting GeForce GT6xx gpus.
+// the above original kernel would simply not compile. the code below is functionally equivalent, a bit slower, and complicated enough
+// to trick the compiler.
+// thanks to Jens Fendler for finding this workaround.
+// TODO: review after some time (May 2013) if this is still needed.
+__kernel void
+blendop_mask_RAW (__read_only image2d_t in_a, __read_only image2d_t in_b, __write_only image2d_t mask, const int width, const int height, 
+             const float gopacity, const int blendif, global const float *blendif_parameters)
+{
+  const int x = get_global_id(0);
+  const int y = get_global_id(1);
+
+  if(x >= width || y >= height) return;
+
+  float4 a = read_imagef(in_a, sampleri, (int2)(x, y));
+  float4 b = read_imagef(in_b, sampleri, (int2)(x, y));
+
+  float bif = blendif_factor_Lab(a, b, blendif, blendif_parameters);
+  float opacity = gopacity * bif;
+  opacity /= bif;
+
+  write_imagef(mask, (int2)(x, y), opacity);
+}
+#endif
 
 __kernel void
-blendop_Lab (__read_only image2d_t in_a, __read_only image2d_t in_b, __write_only image2d_t out, const int width, const int height, 
-             const int mode, const float gopacity, const int blendflag, const int blendif, global const float *blendif_parameters)
+blendop_mask_rgb (__read_only image2d_t in_a, __read_only image2d_t in_b, __write_only image2d_t mask, const int width, const int height, 
+             const float gopacity, const int blendif, global const float *blendif_parameters)
+{
+  const int x = get_global_id(0);
+  const int y = get_global_id(1);
+
+  if(x >= width || y >= height) return;
+
+  float4 a = read_imagef(in_a, sampleri, (int2)(x, y));
+  float4 b = read_imagef(in_b, sampleri, (int2)(x, y));
+
+  float opacity = gopacity * blendif_factor_rgb(a, b, blendif, blendif_parameters);
+
+  write_imagef(mask, (int2)(x, y), opacity);
+}
+
+__kernel void
+blendop_Lab (__read_only image2d_t in_a, __read_only image2d_t in_b, __read_only image2d_t mask, __write_only image2d_t out, const int width, const int height, 
+             const int mode, const int blendflag)
 {
   const int x = get_global_id(0);
   const int y = get_global_id(1);
@@ -358,8 +317,7 @@ blendop_Lab (__read_only image2d_t in_a, __read_only image2d_t in_b, __write_onl
 
   float4 a = read_imagef(in_a, sampleri, (int2)(x, y));
   float4 b = read_imagef(in_b, sampleri, (int2)(x, y));
-
-  float opacity = gopacity * blendif_factor_Lab(a, b, blendif, blendif_parameters);
+  float opacity = read_imagef(mask, sampleri, (int2)(x, y)).x;
 
   /* save before scaling (for later use) */
   float ay = a.y;
@@ -555,6 +513,17 @@ blendop_Lab (__read_only image2d_t in_a, __read_only image2d_t in_b, __write_onl
       o = clamp(LCH_2_Lab(to), min, max);
       break;
 
+    case DEVELOP_BLEND_COLORADJUST:
+      ta = Lab_2_LCH(clamp(a, min, max));
+      tb = Lab_2_LCH(clamp(b, min, max));
+      to.x = tb.x;
+      to.y = (ta.y * (1.0f - opacity)) + (tb.y * opacity);
+      d = fabs(ta.z - tb.z);
+      s = d > 0.5f ? -opacity*(1.0f - d) / d : opacity;
+      to.z = fmod((ta.z * (1.0f - s)) + (tb.z * s) + 1.0f, 1.0f);
+      o = clamp(LCH_2_Lab(to), min, max);
+      break;
+
     case DEVELOP_BLEND_INVERSE:
       o =  clamp((a * opacity) + (b * (1.0f - opacity)), min, max);
       break;
@@ -589,8 +558,8 @@ blendop_Lab (__read_only image2d_t in_a, __read_only image2d_t in_b, __write_onl
 
 
 __kernel void
-blendop_RAW (__read_only image2d_t in_a, __read_only image2d_t in_b, __write_only image2d_t out, const int width, const int height,
-             const int mode, const float opacity, const int blendflag, const int blendif, global const float *blendif_parameters)
+blendop_RAW (__read_only image2d_t in_a, __read_only image2d_t in_b, __read_only image2d_t mask, __write_only image2d_t out, const int width, const int height, 
+             const int mode, const int blendflag)
 {
   const int x = get_global_id(0);
   const int y = get_global_id(1);
@@ -601,6 +570,7 @@ blendop_RAW (__read_only image2d_t in_a, __read_only image2d_t in_b, __write_onl
 
   float a = read_imagef(in_a, sampleri, (int2)(x, y)).x;
   float b = read_imagef(in_b, sampleri, (int2)(x, y)).x;
+  float opacity = read_imagef(mask, sampleri, (int2)(x, y)).x;
 
   const float min = 0.0f;
   const float max = 1.0f;
@@ -689,6 +659,10 @@ blendop_RAW (__read_only image2d_t in_a, __read_only image2d_t in_b, __write_onl
       o = clamp(a, min, max);		// Noop for Raw
       break;
 
+    case DEVELOP_BLEND_COLORADJUST:
+      o = clamp(a, min, max);		// Noop for Raw
+      break;
+
     case DEVELOP_BLEND_INVERSE:
       o =  clamp((a * opacity) + (b * (1.0f - opacity)), min, max);
       break;
@@ -709,8 +683,8 @@ blendop_RAW (__read_only image2d_t in_a, __read_only image2d_t in_b, __write_onl
 
 
 __kernel void
-blendop_rgb (__read_only image2d_t in_a, __read_only image2d_t in_b, __write_only image2d_t out, const int width, const int height,
-             const int mode, const float gopacity, const int blendflag, const int blendif, global const float *blendif_parameters)
+blendop_rgb (__read_only image2d_t in_a, __read_only image2d_t in_b, __read_only image2d_t mask, __write_only image2d_t out, const int width, const int height, 
+             const int mode, const int blendflag)
 {
   const int x = get_global_id(0);
   const int y = get_global_id(1);
@@ -723,8 +697,7 @@ blendop_rgb (__read_only image2d_t in_a, __read_only image2d_t in_b, __write_onl
 
   float4 a = read_imagef(in_a, sampleri, (int2)(x, y));
   float4 b = read_imagef(in_b, sampleri, (int2)(x, y));
-
-  float opacity = gopacity * blendif_factor_rgb(a, b, blendif, blendif_parameters);
+  float opacity = read_imagef(mask, sampleri, (int2)(x, y)).x;
 
   const float4 min = (float4)(0.0f, 0.0f, 0.0f, 1.0f);
   const float4 max = (float4)(1.0f, 1.0f, 1.0f, 1.0f);
@@ -837,6 +810,17 @@ blendop_rgb (__read_only image2d_t in_a, __read_only image2d_t in_b, __write_onl
       o = clamp(HSL_2_RGB(to), min, max);
       break;
 
+    case DEVELOP_BLEND_COLORADJUST:
+      ta = RGB_2_HSL(clamp(a, min, max));
+      tb = RGB_2_HSL(clamp(b, min, max));
+      d = fabs(ta.x - tb.x);
+      s = d > 0.5f ? -opacity*(1.0f - d) / d : opacity;
+      to.x = fmod((ta.x * (1.0f - s)) + (tb.x * s) + 1.0f, 1.0f);
+      to.y = (ta.y * (1.0f - opacity)) + (tb.y * opacity);
+      to.z = tb.z;
+      o = clamp(HSL_2_RGB(to), min, max);
+      break;
+
     case DEVELOP_BLEND_INVERSE:
       o =  clamp((a * opacity) + (b * (1.0f - opacity)), min, max);
       break;
@@ -872,5 +856,18 @@ blendop_copy_alpha (__read_only image2d_t in_a, __read_only image2d_t in_b, __wr
 
   write_imagef(out, (int2)(x, y), pixel);
 }
+
+
+__kernel void
+blendop_set_mask (__write_only image2d_t mask, const int width, const int height, const float value)
+{
+  const int x = get_global_id(0);
+  const int y = get_global_id(1);
+
+  if(x >= width || y >= height) return;
+
+  write_imagef(mask, (int2)(x, y), value);
+}
+
 
 

@@ -43,7 +43,8 @@ dtgtk_cairo_paint_flags_t;
 
 
 typedef void (*DTGTKCairoPaintIconFunc)(cairo_t *cr,gint x,gint y,gint w,gint h,gint flags);
-
+/** Paint nothing */
+void dtgtk_cairo_paint_empty(cairo_t *cr, gint x,int y,gint w,gint h, gint flags);
 /** Paint a triangle left/right/up/down */
 void dtgtk_cairo_paint_triangle(cairo_t *cr, gint x,int y,gint w,gint h, gint flags);
 /** Paint a solid triangle left/right/up/down */
@@ -68,6 +69,8 @@ void dtgtk_cairo_paint_plusminus(cairo_t *cr,gint x,gint y,gint w,gint h,gint fl
 void dtgtk_cairo_paint_color(cairo_t *cr,gint x,gint y,gint w,gint h,gint flags);
 /** Paint a eye icon */
 void dtgtk_cairo_paint_eye(cairo_t *cr,gint x,gint y,gint w,gint h,gint flags);
+/** Paint a eye icon which is crossed out if toggled */
+void dtgtk_cairo_paint_eye_toggle(cairo_t *cr,gint x,gint y,gint w,gint h,gint flags);
 /** Paint a timer icon */
 void dtgtk_cairo_paint_timer(cairo_t *cr,gint x,gint y,gint w,gint h,gint flags);
 /** Paint a filmstrip icon */
@@ -116,6 +119,8 @@ void dtgtk_cairo_paint_rect_landscape(cairo_t *cr,gint x,gint y,gint w,gint h,gi
 void dtgtk_cairo_paint_rect_portrait(cairo_t *cr,gint x,gint y,gint w,gint h,gint flags);
 /** paint a zoom icon */
 void dtgtk_cairo_paint_zoom(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags);
+/** paint a duplicate/multi instance indicator */
+void dtgtk_cairo_paint_multiinstance(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags);
 
 /** paint active modulgroup icon */
 void dtgtk_cairo_paint_modulegroup_active(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags);
@@ -131,6 +136,9 @@ void dtgtk_cairo_paint_modulegroup_color(cairo_t *cr, gint x, gint y, gint w, gi
 void dtgtk_cairo_paint_modulegroup_correct(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags);
 /** paint effect modulgroup icon */
 void dtgtk_cairo_paint_modulegroup_effect(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags);
+
+/** paint the pin for map thumbnails */
+void dtgtk_cairo_paint_map_pin(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags);
 
 #endif
 

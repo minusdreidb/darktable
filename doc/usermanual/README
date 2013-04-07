@@ -1,5 +1,14 @@
 All invocations of 'make' have to be done inside of your build/ dir after running cmake!
 
+Building manual
+---------------------------------------------------------
+To build the usermanual you need to install the following tools:
+  xsltproc (plus optionally saxon), fop and gnome-doc-utils (for xml2po)
+
+XSLT processor saxon is able to give a nicely looking html usermanual with
+correctly displayed images and screenshots. If saxon is not found, xsltproc
+will be used as a fallback. Expect inconsistent screenshot and image dimensions in
+that case.
 
 
 Writing guidelines
@@ -35,23 +44,18 @@ make darktable-usermanual-final.pdf
 
 
 
-Building final translated manual
+Building the translated manual
 --------------------------------------------------------
-when building a translated manual the content would only include sections with status "final" 
-and where status is not set. so with other words, no section with status "draft" will occur.
+When building a translated manual all chapters are included, also sections with status "draft" will occur.
 
-make darktable-usermanual-sv
+make darktable-usermanual-<language code>
 
 
 
 Translators
 --------------------------------------------------------
-To add you language just simple edit po/LINGUAS and add your language code.
+To add you language just edit po/LINGUAS and add your language code. Make sure to rerun cmake after this change.
 
-make update-template updates the pot file.
+For updating the po file just enter the build directory and execute
 
-For updating po file from the template just enter the po directory and execute 'make update-usermanual-nl'
-
-
-
-
+make update-usermanual-<language code>

@@ -26,11 +26,6 @@
 #include <glib.h>
 #include <inttypes.h>
 
-/** define for max path/filename length */
-#define DT_MAX_FILENAME_LEN 256
-// TODO: separate into path/filename and store 256 for filename
-#define DT_MAX_PATH_LEN 1024
-
 /** return value of image io functions. */
 typedef enum dt_imageio_retval_t
 {
@@ -57,9 +52,20 @@ typedef enum
   // set during import if images is a high-dynamic range image..
   DT_IMAGE_HDR = 128,
   // set when marked for deletion
-  DT_IMAGE_REMOVE = 256
+  DT_IMAGE_REMOVE = 256,
+  // set when auto-applying presets have been applied to this image.
+  DT_IMAGE_AUTO_PRESETS_APPLIED = 512,
+  // legacy flag. is set for all new images. i hate to waste a bit on this :(
+  DT_IMAGE_NO_LEGACY_PRESETS = 1024
 }
 dt_image_flags_t;
+
+typedef enum dt_image_colorspace_t
+{
+  DT_IMAGE_COLORSPACE_NONE,
+  DT_IMAGE_COLORSPACE_SRGB,
+  DT_IMAGE_COLORSPACE_ADOBE_RGB
+} dt_image_colorspace_t;
 
 typedef struct dt_image_raw_parameters_t
 {
@@ -92,10 +98,19 @@ typedef struct dt_image_t
   // used by library
   int32_t num, flags, film_id, id, group_id;
 
-  uint32_t filters;  // demosaic pattern
-  int32_t bpp;       // bytes per pixel
- 
+  uint32_t filters;          // demosaic pattern
+  int32_t bpp;               // bytes per pixel
+  float d65_color_matrix[9]; // the 3x3 matrix embedded in some DNGs
+  uint8_t *profile;          // embedded profile, for example from JPEGs
+  uint32_t profile_size;
+  dt_image_colorspace_t colorspace; // the colorspace that is specified in exif. mostly used for jpeg files
+
   dt_image_raw_parameters_t legacy_flip; // unfortunately needed to convert old bits to new flip module.
+
+  /* gps coords */
+  double longitude;
+  double latitude;
+
 }
 dt_image_t;
 
@@ -127,6 +142,8 @@ int32_t dt_image_duplicate(const int32_t imgid);
 /** flips the image, clock wise, if given flag. */
 void dt_image_flip(const int32_t imgid, const int32_t cw);
 void dt_image_set_flip(const int32_t imgid, const int32_t user_flip);
+/** set image location lon/lat */
+void dt_image_set_location(const int32_t imgid, double lon, double lat);
 /** returns 1 if there is history data found for this image, 0 else. */
 int dt_image_altered(const uint32_t imgid);
 /** returns the orientation bits of the image, exif or user override, if set. */
@@ -303,6 +320,11 @@ int32_t dt_image_copy(const int32_t imgid, const int32_t filmid);
 void dt_image_write_sidecar_file(int imgid);
 void dt_image_synch_xmp(const int selected);
 void dt_image_synch_all_xmp(const gchar *pathname);
+
+#if GLIB_CHECK_VERSION (2, 26, 0)
+// add an offset to the exif_datetime_taken field
+void dt_image_add_time_offset(const int imgid, const long int offset);
+#endif
 
 #endif
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh

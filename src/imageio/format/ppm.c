@@ -21,6 +21,7 @@
 #include <inttypes.h>
 #include "common/darktable.h"
 #include "common/imageio_module.h"
+#include "common/imageio.h"
 
 DT_MODULE(1)
 
@@ -57,6 +58,7 @@ get_params(dt_imageio_module_format_t *self, int *size)
 {
   *size = sizeof(dt_imageio_module_data_t);
   dt_imageio_module_data_t *d = (dt_imageio_module_data_t *)malloc(sizeof(dt_imageio_module_data_t));
+  memset(d,0,sizeof(dt_imageio_module_data_t));
   return d;
 }
 
@@ -76,6 +78,11 @@ set_params(dt_imageio_module_format_t *self, void *params, int size)
 int bpp(dt_imageio_module_data_t *p)
 {
   return 16;
+}
+
+int levels(dt_imageio_module_data_t *p)
+{
+  return IMAGEIO_RGB|IMAGEIO_INT16;
 }
 
 const char*

@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2009--2011 johannes hanika.
+    copyright (c) 2009--2011 johannes hanika, henrik andersson.
     copyright (c) 2012 Jose Carlos Garcia Sogo
 
     darktable is free software: you can redistribute it and/or modify
@@ -31,12 +31,13 @@
 #include "libs/collect.h"
 #include "views/view.h"
 
+#include <regex.h>
+
 DT_MODULE(1)
 
 #define MAX_RULES 10
 
-/* Folders code starts here
- TODO: Clean it */
+#define PARAM_STRING_SIZE 256 // FIXME: is this enough !?
 
 //DT_MODULE(1)
 
@@ -47,6 +48,7 @@ typedef struct dt_lib_collect_rule_t
   GtkComboBox *combo;
   GtkWidget *text;
   GtkWidget *button;
+  gboolean typing;
 }
 dt_lib_collect_rule_t;
 
@@ -54,19 +56,19 @@ typedef struct dt_lib_collect_t
 {
   dt_lib_collect_rule_t rule[MAX_RULES];
   int active_rule;
-  
+
   GtkTreeView *view;
   GtkTreeModel *treemodel;
   gboolean tree_new;
   GtkTreeModel *listmodel;
   GtkScrolledWindow *scrolledwindow;
-  
-  GVolumeMonitor *gv_monitor;
-  
-  GPtrArray *labels;
-  GPtrArray *trees;
+
+//  GVolumeMonitor *gv_monitor;
 
   GtkBox *box;
+  GtkScrolledWindow *sw2;
+  GPtrArray *labels;
+  GPtrArray *trees;
 
   struct dt_lib_collect_params_t *params;
 }
@@ -75,10 +77,11 @@ dt_lib_collect_t;
 typedef struct dt_lib_collect_params_t
 {
   uint32_t rules;
-  struct {
+  struct
+  {
     uint32_t item:16;
     uint32_t mode:16;
-    char string[DT_MAX_PATH_LEN];
+    char string[PARAM_STRING_SIZE];
   } rule[MAX_RULES];
 } dt_lib_collect_params_t;
 
@@ -89,6 +92,7 @@ typedef enum dt_lib_collect_cols_t
   DT_LIB_COLLECT_COL_TOOLTIP,
   DT_LIB_COLLECT_COL_PATH,
   DT_LIB_COLLECT_COL_COUNT,
+  DT_LIB_COLLECT_COL_VISIBLE,
   DT_LIB_COLLECT_NUM_COLS
 }
 dt_lib_collect_cols_t;
@@ -103,8 +107,9 @@ typedef struct _image_t
 }
 _image_t;
 
-static void _lib_collect_gui_update (dt_lib_module_t *d);
+static void _lib_collect_gui_update (dt_lib_module_t *self);
 static void _lib_folders_update_collection(const gchar *filmroll);
+static void entry_changed (GtkWidget *entry, gchar *new_text, gint new_length, gpointer *position, dt_lib_collect_rule_t *d);
 
 const char*
 name ()
@@ -120,19 +125,22 @@ static void
 row_activated (GtkTreeView *view, GtkTreePath *path, GtkTreeViewColumn *col, dt_lib_collect_t *d);
 
 /* Update the params struct with active ruleset */
-static void _lib_collect_update_params(dt_lib_collect_t *d) {
+static void _lib_collect_update_params(dt_lib_collect_t *d)
+{
   /* reset params */
   dt_lib_collect_params_t *p = d->params;
   memset(p,0,sizeof(dt_lib_collect_params_t));
 
   /* for each active rule set update params */
-  const int active = CLAMP(dt_conf_get_int("plugins/lighttable/collect/num_rules") - 1, 0, (MAX_RULES-1));
+  const int _a = dt_conf_get_int("plugins/lighttable/collect/num_rules") - 1;
+  const int active = CLAMP(_a, 0, (MAX_RULES-1));
   char confname[200];
-  for (int i=0; i<=active; i++) {
+  for (int i=0; i<=active; i++)
+  {
     /* get item */
     snprintf(confname, 200, "plugins/lighttable/collect/item%1d", i);
     p->rule[i].item = dt_conf_get_int(confname);
-    
+
     /* get mode */
     snprintf(confname, 200, "plugins/lighttable/collect/mode%1d", i);
     p->rule[i].mode = dt_conf_get_int(confname);
@@ -140,14 +148,15 @@ static void _lib_collect_update_params(dt_lib_collect_t *d) {
     /* get string */
     snprintf(confname, 200, "plugins/lighttable/collect/string%1d", i);
     gchar* string = dt_conf_get_string(confname);
-    if (string != NULL) {
-      snprintf(p->rule[i].string,DT_MAX_PATH_LEN,"%s", string);
+    if (string != NULL)
+    {
+      snprintf(p->rule[i].string,PARAM_STRING_SIZE,"%s", string);
       g_free(string);
     }
 
-    fprintf(stderr,"[%i] %d,%d,%s\n",i, p->rule[i].item, p->rule[i].mode,  p->rule[i].string);
+    // fprintf(stderr,"[%i] %d,%d,%s\n",i, p->rule[i].item, p->rule[i].mode,  p->rule[i].string);
   }
-  
+
   p->rules = active+1;
 
 }
@@ -168,16 +177,17 @@ int set_params(dt_lib_module_t *self, const void *params, int size)
   /* update conf settings from params */
   dt_lib_collect_params_t *p = (dt_lib_collect_params_t *)params;
   char confname[200];
-  
-  for (int i=0; i<p->rules; i++) {
+
+  for (uint32_t i=0; i<p->rules; i++)
+  {
     /* set item */
     snprintf(confname, 200, "plugins/lighttable/collect/item%1d", i);
     dt_conf_set_int(confname, p->rule[i].item);
-    
+
     /* set mode */
     snprintf(confname, 200, "plugins/lighttable/collect/mode%1d", i);
     dt_conf_set_int(confname, p->rule[i].mode);
-    
+
     /* set string */
     snprintf(confname, 200, "plugins/lighttable/collect/string%1d", i);
     dt_conf_set_string(confname, p->rule[i].string);
@@ -199,7 +209,7 @@ int set_params(dt_lib_module_t *self, const void *params, int size)
 
 uint32_t views()
 {
-  return DT_VIEW_LIGHTTABLE;
+  return DT_VIEW_LIGHTTABLE | DT_VIEW_MAP;
 }
 
 uint32_t container()
@@ -208,31 +218,31 @@ uint32_t container()
 }
 /* callback for drag and drop */
 /*static void _lib_keywords_drag_data_received_callback(GtkWidget *w,
-					  GdkDragContext *dctx,
-					  guint x,
-					  guint y,
-					  GtkSelectionData *data,
-					  guint info,
-					  guint time,
-					  gpointer user_data);
+            GdkDragContext *dctx,
+            guint x,
+            guint y,
+            GtkSelectionData *data,
+            guint info,
+            guint time,
+            gpointer user_data);
 */
 /* set the data for drag and drop, eg the treeview path of drag source */
 /*static void _lib_keywords_drag_data_get_callback(GtkWidget *w,
-						 GdkDragContext *dctx,
-						 GtkSelectionData *data,
-						 guint info,
-						 guint time,
-						 gpointer user_data);
+             GdkDragContext *dctx,
+             GtkSelectionData *data,
+             guint info,
+             guint time,
+             gpointer user_data);
 */
 /* add keyword to collection rules */
 /*static void _lib_keywords_add_collection_rule(GtkTreeView *view, GtkTreePath *tp,
-					      GtkTreeViewColumn *tvc, gpointer user_data);
+                GtkTreeViewColumn *tvc, gpointer user_data);
 */
 
 void _sync_list(gpointer *data, gpointer *user_data)
 {
   _image_t *img = (_image_t *)data;
-  
+
   if(img->exists == 0)
   {
     //remove filie
@@ -252,6 +262,7 @@ void _sync_list(gpointer *data, gpointer *user_data)
   }
 }
 
+#if 0
 void view_popup_menu_onSync (GtkWidget *menuitem, gpointer userdata)
 {
   GtkTreeView *treeview = GTK_TREE_VIEW(userdata);
@@ -264,7 +275,7 @@ void view_popup_menu_onSync (GtkWidget *menuitem, gpointer userdata)
   GList *filelist = NULL;
   int count_new = 0;
   int count_found = 0;
-  
+
   model = gtk_tree_view_get_model(treeview);
   selection = gtk_tree_view_get_selection(GTK_TREE_VIEW(treeview));
   gtk_tree_selection_get_selected(selection, &model, &iter);
@@ -309,7 +320,7 @@ void view_popup_menu_onSync (GtkWidget *menuitem, gpointer userdata)
     /* TODO: check here for error output */
 
     gboolean found = 0;
-    
+
     /* TODO: what happens if there are new subdirs? */
     const gchar *name = g_dir_read_name(dir);
     while (name != NULL)
@@ -346,7 +357,7 @@ void view_popup_menu_onSync (GtkWidget *menuitem, gpointer userdata)
       name = g_dir_read_name(dir);
     }
   }
- 
+
   /* Call now the foreach function that gives the total data */
   int count_missing = g_list_length(filelist) - count_new - count_found;
 
@@ -356,7 +367,7 @@ void view_popup_menu_onSync (GtkWidget *menuitem, gpointer userdata)
                                           GTK_DIALOG_DESTROY_WITH_PARENT,
                                           GTK_MESSAGE_QUESTION,
                                           GTK_BUTTONS_YES_NO,
-                                          _("There are %d new images and %d deleted images. Do you want to sync this folder?"), count_new,
+                                          "_(There are %d new images and %d deleted images. Do you want to sync this folder?)", count_new, 
                                           count_missing);
 
   if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT)
@@ -388,6 +399,7 @@ void view_popup_menu_onSync (GtkWidget *menuitem, gpointer userdata)
   gtk_widget_destroy (dialog);
 
 }
+#endif
 
 void view_popup_menu_onSearchFilmroll (GtkWidget *menuitem, gpointer userdata)
 {
@@ -445,7 +457,7 @@ void view_popup_menu_onSearchFilmroll (GtkWidget *menuitem, gpointer userdata)
       {
         id = sqlite3_column_int(stmt, 0);
         old = (gchar *) sqlite3_column_text(stmt, 1);
-        
+
         query = NULL;
         query = dt_util_dstrcat(query, "update film_rolls set folder=?1 where id=?2");
 
@@ -493,7 +505,7 @@ error:
   dt_control_log(_("Problem selecting new path for the filmroll in %s"), tree_path);
 
   g_free(tree_path);
-  g_free(new_path); 
+  g_free(new_path);
 }
 
 void view_popup_menu_onRemove (GtkWidget *menuitem, gpointer userdata)
@@ -506,7 +518,7 @@ void view_popup_menu_onRemove (GtkWidget *menuitem, gpointer userdata)
 
   gchar *filmroll_path = NULL;
   gchar *fullq = NULL;
-  
+
   /* Get info about the filmroll (or parent) selected */
   model = gtk_tree_view_get_model(treeview);
   selection = gtk_tree_view_get_selection(GTK_TREE_VIEW(treeview));
@@ -515,7 +527,7 @@ void view_popup_menu_onRemove (GtkWidget *menuitem, gpointer userdata)
 
   /* Clean selected images, and add to the table those which are going to be deleted */
   DT_DEBUG_SQLITE3_EXEC(dt_database_get(darktable.db), "delete from selected_images", NULL, NULL, NULL);
- 
+
   fullq = dt_util_dstrcat(fullq, "insert into selected_images select id from images where film_id  in (select id from film_rolls where folder like '%s%%')", filmroll_path);
   DT_DEBUG_SQLITE3_EXEC(dt_database_get(darktable.db), fullq, NULL, NULL, NULL);
 
@@ -610,10 +622,12 @@ view_popup_menu (GtkWidget *treeview, GdkEventButton *event, gpointer userdata)
                    (GCallback) view_popup_menu_onSearchFilmroll, treeview);
   gtk_menu_shell_append(GTK_MENU_SHELL(menu), menuitem);
 
+#if 0
   menuitem = gtk_menu_item_new_with_label(_("sync..."));
   g_signal_connect(menuitem, "activate",
                    (GCallback) view_popup_menu_onSync, treeview);
   gtk_menu_shell_append(GTK_MENU_SHELL(menu), menuitem);
+#endif
 
   menuitem = gtk_menu_item_new_with_label(_("remove..."));
   gtk_menu_shell_append(GTK_MENU_SHELL(menu), menuitem);
@@ -679,17 +693,27 @@ view_onPopupMenu (GtkWidget *treeview, gpointer userdata)
 static int
 _count_images(const char *path)
 {
+  // FIXME: this function is a major performance problem
+  //        if many folders are counted. until it's cached somehow, it's switched off:
+  return 0;
+#if 0
   sqlite3_stmt *stmt = NULL;
   gchar query[1024] = {0};
   int count = 0;
 
-  snprintf(query, 1024, "select count(id) from images where film_id in (select id from film_rolls where folder like '%s%%')", path);
+  gchar *escaped_text = NULL;
+  escaped_text = dt_util_str_replace(path, "'", "''");
+
+  snprintf (query, 1024, "select count(id) from images where film_id in (select id from film_rolls where folder like '%s%%')", escaped_text);
   DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), query, -1, &stmt, NULL);
   if (sqlite3_step(stmt) == SQLITE_ROW)
     count = sqlite3_column_int(stmt, 0);
   sqlite3_finalize(stmt);
 
+  g_free(escaped_text);
+
   return count;
+#endif
 }
 
 static gboolean
@@ -723,114 +747,249 @@ static GtkTreeStore *
 _folder_tree ()
 {
   /* intialize the tree store */
-  char query[1024];
   sqlite3_stmt *stmt;
-  snprintf(query, 1024, "select * from film_rolls");
-  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), query, -1, &stmt, NULL);
-  GtkTreeStore *store = gtk_tree_store_new(DT_LIB_COLLECT_NUM_COLS, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_UINT, G_TYPE_STRING, G_TYPE_INT);
+//  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), "select folder,external_drive from film_rolls order by folder desc", -1, &stmt, NULL);
+  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), "select folder from film_rolls order by folder desc", -1, &stmt, NULL);
+  GtkTreeStore *store = gtk_tree_store_new(DT_LIB_COLLECT_NUM_COLS, G_TYPE_STRING, G_TYPE_UINT, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_INT, G_TYPE_BOOLEAN);
 
   // initialize the model with the paths
 
   while (sqlite3_step(stmt) == SQLITE_ROW)
   {
-    if(strchr((const char *)sqlite3_column_text(stmt, 2),'/')==0)
+    int level = 0;
+    char *value;
+    GtkTreeIter current, iter;
+    GtkTreePath *root;
+    char **pch = g_strsplit((char *)sqlite3_column_text(stmt, 0), "/", -1);
+#if 0
+    char *external = g_strdup((char *)sqlite3_column_text(stmt, 1));
+
+    if (external == NULL)
+      external = g_strdup("Local");
+#endif
+    gboolean found=FALSE;
+
+    root = gtk_tree_path_new_first();
+    gtk_tree_model_get_iter (GTK_TREE_MODEL(store), &iter, root);
+    //current = iter; // This needs to be deleted if the following code is enabled
+#if 0
+    int children = gtk_tree_model_iter_n_children(GTK_TREE_MODEL(store),NULL);
+    for (int k=0;k<children;k++)
     {
-      // Do nothing here
+      if (gtk_tree_model_iter_nth_child(GTK_TREE_MODEL(store), &iter, NULL, k))
+      {
+        gtk_tree_model_get (GTK_TREE_MODEL(store), &iter, 0, &value, -1);
+
+        if (strcmp(value, external)==0)
+        {
+          found = TRUE;
+          current = iter;
+          break;
+        }
+      }
     }
-    else
+
+    if (!found)
     {
-      int level = 0;
-      char *value;
-      GtkTreeIter current, iter;
-      GtkTreePath *root;
-      char *path = g_strdup((char *)sqlite3_column_text(stmt, 2));
-      char *pch = strtok((char *)sqlite3_column_text(stmt, 2),"/");
-      char *external = g_strdup((char *)sqlite3_column_text(stmt, 3));
+      gtk_tree_store_insert(store, &iter, NULL, 0);
+      gtk_tree_store_set(store, &iter, 0, external, -1);
+      current = iter;
+    }
 
-      if (external == NULL)
-        external = g_strdup("Local");
+    level=1;
+#endif
 
-      gboolean found=FALSE;
-
-      root = gtk_tree_path_new_first();
-      gtk_tree_model_get_iter (GTK_TREE_MODEL(store), &iter, root);
-
-      int children = gtk_tree_model_iter_n_children(GTK_TREE_MODEL(store),NULL);
+    // g_strsplit returns pch[0] always as an empty string ""
+    while (pch[level] != NULL)
+    {
+      found = FALSE;
+      int children = gtk_tree_model_iter_n_children(GTK_TREE_MODEL(store),level>0?&current:NULL);
+      /* find child with name, if not found create and continue */
       for (int k=0;k<children;k++)
       {
-        if (gtk_tree_model_iter_nth_child(GTK_TREE_MODEL(store), &iter, NULL, k))
+        if (gtk_tree_model_iter_nth_child(GTK_TREE_MODEL(store), &iter, level>0?&current:NULL, k))
         {
           gtk_tree_model_get (GTK_TREE_MODEL(store), &iter, 0, &value, -1);
 
-          if (strcmp(value, external)==0)
+          if (strcmp(value, pch[level])==0)
           {
-            found = TRUE;
             current = iter;
+            found = TRUE;
             break;
           }
-	      }
+        }
       }
 
+      /* lets add new path and assign current */
       if (!found)
       {
-        gtk_tree_store_insert(store, &iter, NULL, 0);
-        gtk_tree_store_set(store, &iter, 0, external, -1);
+        gchar *pth2 = NULL;
+        pth2 = dt_util_dstrcat(pth2, "/");
+
+        for (int i=0; i <= level; i++)
+        {
+          if (level > 0 && i != 0)
+            pth2 = dt_util_dstrcat(pth2, "%s/", pch[i]);
+        }
+
+        snprintf(pth2+strlen(pth2)-1, 1, "%s", "\0");
+
+        int count = _count_images(pth2);
+        gtk_tree_store_insert(store, &iter, level>0?&current:NULL,0);
+        gtk_tree_store_set(store, &iter, DT_LIB_COLLECT_COL_TEXT, pch[level],
+                                         DT_LIB_COLLECT_COL_PATH, pth2,
+                                         DT_LIB_COLLECT_COL_COUNT, count,
+                                         DT_LIB_COLLECT_COL_VISIBLE, TRUE, -1);
         current = iter;
       }
 
-      level=1;
-      while (pch != NULL)
-      {
-        found = FALSE;
-        int children = gtk_tree_model_iter_n_children(GTK_TREE_MODEL(store),level>0?&current:NULL);
-        /* find child with name, if not found create and continue */
-        for (int k=0;k<children;k++)
-        {
-          if (gtk_tree_model_iter_nth_child(GTK_TREE_MODEL(store), &iter, level>0?&current:NULL, k))
-          {
-            gtk_tree_model_get (GTK_TREE_MODEL(store), &iter, 0, &value, -1);
-
-            if (strcmp(value, pch)==0)
-            {
-              current = iter;
-              found = TRUE;
-              break;
-            }
-          }
-        }
-
-        /* lets add new path and assign current */
-        if (!found)
-        {
-          const char *pth = g_strndup (path, strstr(path, pch)-path);
-          const char *pth2 = g_strconcat(pth, pch, NULL);
-
-          int count = _count_images(pth2);
-          gtk_tree_store_insert(store, &iter, level>0?&current:NULL,0);
-          gtk_tree_store_set(store, &iter, DT_LIB_COLLECT_COL_TEXT, pch, DT_LIB_COLLECT_COL_PATH, pth2, DT_LIB_COLLECT_COL_COUNT, count, -1);
-          current = iter;
-        }
-
-        level++;
-        pch = strtok(NULL, "/");
-      }
+      level++;
     }
   }
-
   return store;
 }
 
+static gboolean
+match_string (GtkTreeModel *model, GtkTreePath *path, GtkTreeIter *iter, gpointer data)
+{
+  dt_lib_collect_rule_t *dr = (dt_lib_collect_rule_t *) data;
+  gchar *str = NULL;
+  const gchar *string;
+  gboolean cur_state, visible;
+
+  gtk_tree_model_get (model, iter, DT_LIB_COLLECT_COL_PATH, &str, DT_LIB_COLLECT_COL_VISIBLE, &cur_state, -1);
+
+  if (dr->typing == FALSE && !cur_state)
+  {
+    visible = TRUE;
+    gtk_tree_store_set (GTK_TREE_STORE(model), iter, DT_LIB_COLLECT_COL_VISIBLE, visible, -1);
+
+    //g_free(str);
+    //str = NULL;
+
+    return FALSE;
+  }
+
+  regex_t re;
+  gchar *pattern = NULL;
+  int status;
+
+  string = gtk_entry_get_text(GTK_ENTRY(dr->text));
+  pattern = dt_util_dstrcat (pattern, "%s%s%s", ".*", string, ".*");
+
+  regcomp(&re, pattern, REG_NOSUB);
+
+  status = regexec (&re, str, (size_t) 0, NULL, 0);
+  regfree (&re);
+  //printf("Model: %s -- Entry: %s -- Status: %s\n", str, string, status == REG_NOMATCH?"No Match":"MATCH!");
+
+  if (status == REG_NOMATCH)
+    visible = FALSE;
+  else
+    visible = TRUE;
+
+  gtk_tree_store_set (GTK_TREE_STORE(model), iter, DT_LIB_COLLECT_COL_VISIBLE, visible, -1);
+
+  //g_free(str);
+
+  return FALSE;
+}
+
+
+static gboolean
+reveal_func (GtkTreeModel *model, GtkTreePath *path, GtkTreeIter *iter, gpointer data)
+{
+  gboolean state;
+  GtkTreeIter parent, child = *iter;
+  gchar *str;
+
+  gtk_tree_model_get (model, iter, DT_LIB_COLLECT_COL_PATH, &str, DT_LIB_COLLECT_COL_VISIBLE, &state, -1);
+  if (!state)
+    return FALSE;
+
+  while (gtk_tree_model_iter_parent (model, &parent, &child))
+  {
+    gtk_tree_model_get (model, &parent, DT_LIB_COLLECT_COL_PATH, &str, DT_LIB_COLLECT_COL_VISIBLE, &state, -1);
+    gtk_tree_store_set (GTK_TREE_STORE (model), &parent, DT_LIB_COLLECT_COL_VISIBLE, TRUE, -1);
+    child = parent;
+  }
+
+  return FALSE;
+}
+
+static gboolean
+expand_row (GtkTreeModel *model, GtkTreePath *path, GtkTreeIter *iter, GtkTreeView *view)
+{
+  gboolean state;
+
+  gtk_tree_model_get (model, iter, DT_LIB_COLLECT_COL_VISIBLE, &state, -1);
+
+  if (state)
+    gtk_tree_view_expand_row (view, path, TRUE);
+
+  return FALSE;
+}
+
+static void
+expand_tree (GtkTreeView *view, dt_lib_collect_rule_t *dr)
+{
+  GtkTreeModel *model = gtk_tree_view_get_model (view);
+
+  if (dr->typing)
+  {
+    gtk_tree_model_foreach (model, (GtkTreeModelForeachFunc)expand_row, view);
+  }
+}
+
+static void
+refilter (GtkTreeModel *model, gpointer data)
+{
+  gtk_tree_model_foreach (model, (GtkTreeModelForeachFunc)match_string, data);
+
+  gtk_tree_model_foreach (model, (GtkTreeModelForeachFunc)reveal_func, NULL);
+}
+
+
 static GtkTreeModel *
-_create_filtered_model (GtkTreeModel *model, GtkTreeIter iter)
+_create_filtered_model (GtkTreeModel *model, GtkTreeIter iter, dt_lib_collect_rule_t *dr)
 {
   GtkTreeModel *filter = NULL;
   GtkTreePath *path;
   GtkTreeIter child;
 
+  sqlite3_stmt *stmt = NULL;
+  gchar *pth, *query = NULL;
+  int id = -1;
+
+
   /* Filter level */
   while (gtk_tree_model_iter_has_child(model, &iter))
   {
-    if (gtk_tree_model_iter_n_children(model, &iter) == 1)
+    int n_children = gtk_tree_model_iter_n_children(model, &iter);
+    if ( n_children >= 1)
+    {
+      /* Check if this path also matches a filmroll */
+      gtk_tree_model_get (model, &iter, DT_LIB_COLLECT_COL_PATH, &pth, -1);
+
+      query = dt_util_dstrcat(query, "select id from film_rolls where folder like '%s'", pth);
+      DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), query, -1, &stmt, NULL);
+      if (sqlite3_step(stmt) == SQLITE_ROW)
+        id = sqlite3_column_int(stmt, 0);
+      sqlite3_finalize(stmt);
+
+      g_free(pth);
+      g_free(query);
+      query = NULL;
+
+      if (id != -1)
+      {
+        child = iter;
+        gtk_tree_model_iter_parent(model, &iter, &child);
+        break;
+      }
+    }
+
+    if ( n_children == 1)
     {
       gtk_tree_model_iter_children(model, &child, &iter);
 
@@ -841,13 +1000,18 @@ _create_filtered_model (GtkTreeModel *model, GtkTreeIter iter)
     }
     else
       break;
-	}
+  }
 
   path = gtk_tree_model_get_path (model, &iter);
 
   /* Create filter and set virtual root */
   filter = gtk_tree_model_filter_new (model, path);
   gtk_tree_path_free (path);
+
+  gtk_tree_model_filter_set_visible_column (GTK_TREE_MODEL_FILTER(filter), DT_LIB_COLLECT_COL_VISIBLE);
+
+  if (dr != NULL)
+    refilter (model, dr);
 
   return filter;
 }
@@ -856,8 +1020,8 @@ static GtkTreeView *
 _create_treeview_display (GtkTreeModel *model)
 {
   GtkTreeView *tree;
-  GtkCellRenderer *renderer, *renderer2;
-  GtkTreeViewColumn *col1, *col2;
+  GtkCellRenderer *renderer;
+  GtkTreeViewColumn *col1;
 
   tree = GTK_TREE_VIEW(gtk_tree_view_new ());
 
@@ -867,22 +1031,24 @@ _create_treeview_display (GtkTreeModel *model)
   gtk_tree_view_column_set_sizing(col1, GTK_TREE_VIEW_COLUMN_FIXED);
   gtk_tree_view_column_set_fixed_width (col1, 230);
   gtk_tree_view_column_set_max_width (col1, 230);
-  
+
   renderer = gtk_cell_renderer_text_new();
   gtk_tree_view_column_pack_start(col1, renderer, TRUE);
   gtk_tree_view_column_add_attribute(col1, renderer, "text", DT_LIB_COLLECT_COL_TEXT);
-  
+
   gtk_tree_view_column_set_cell_data_func(col1, renderer, _show_filmroll_present, NULL, NULL);
 
-  col2 = gtk_tree_view_column_new();
+#if 0 // FIXME: count switched off for now, as it is a performance regression (see #8981).
+  GtkTreeViewColumn *col2 = gtk_tree_view_column_new();
   gtk_tree_view_append_column(tree,col2);
-  
-  renderer2 = gtk_cell_renderer_text_new();
+
+  GtkCellRenderer *renderer2 = gtk_cell_renderer_text_new();
   gtk_tree_view_column_pack_start(col2, renderer2, TRUE);
   gtk_tree_view_column_add_attribute(col2, renderer2, "text", DT_LIB_COLLECT_COL_COUNT);
-  
+#endif
+
   gtk_tree_view_set_model(tree, GTK_TREE_MODEL(model));
-  
+
   gtk_tree_view_set_headers_visible(tree, FALSE);
 
   /* free store, treeview has its own storage now */
@@ -944,54 +1110,95 @@ get_collect (dt_lib_collect_rule_t *r)
   return d;
 }
 
-static gboolean
-changed_callback (GtkEntry *entry, dt_lib_collect_rule_t *dr)
+static void
+set_properties (dt_lib_collect_rule_t *dr)
+{
+  int property = gtk_combo_box_get_active(dr->combo);
+  const gchar *text = NULL;
+  text = gtk_entry_get_text(GTK_ENTRY(dr->text));
+
+  char confname[200];
+  snprintf(confname, 200, "plugins/lighttable/collect/string%1ld", dr->num);
+  dt_conf_set_string (confname, text);
+  snprintf(confname, 200, "plugins/lighttable/collect/item%1ld", dr->num);
+  dt_conf_set_int (confname, property);
+}
+
+static void
+folders_view (dt_lib_collect_rule_t *dr)
+{
+  dt_lib_collect_t *d = get_collect (dr);
+
+  GtkTreeView *tree;
+
+  gtk_widget_hide(GTK_WIDGET(d->sw2));
+  gtk_widget_hide(GTK_WIDGET(d->scrolledwindow));
+
+  set_properties (dr);
+
+  if (d->trees != NULL)
+  {
+    if (dr->typing == FALSE)
+    {
+      // Do nothing here
+    }
+    else
+    {
+      for (guint i=0; i<d->trees->len; i++)
+      {
+        tree = GTK_TREE_VIEW(g_ptr_array_index (d->trees, i));
+        GtkTreeModelFilter *modelfilter = GTK_TREE_MODEL_FILTER(gtk_tree_view_get_model (tree));
+        GtkTreeModel *model = gtk_tree_model_filter_get_model (modelfilter);
+        refilter (model, dr);
+        expand_tree (tree, dr);
+      }
+    }
+  }
+  gtk_widget_show(GTK_WIDGET(d->box));
+  gtk_widget_show(GTK_WIDGET(d->sw2));
+}
+
+static void
+list_view (dt_lib_collect_rule_t *dr)
 {
   // update related list
   dt_lib_collect_t *d = get_collect(dr);
   sqlite3_stmt *stmt;
   GtkTreeIter iter;
-  
 
-  GtkWidget *label;
-  GtkTreeView *tree;
   GtkTreeView *view;
   GtkTreeModel *listmodel;
-  GtkTreeModel *treemodel;
-
-  gtk_widget_hide(GTK_WIDGET(d->box));
-  gtk_widget_hide(GTK_WIDGET(d->scrolledwindow));
 
   view = d->view;
   listmodel = d->listmodel;
   g_object_ref(listmodel);
   gtk_tree_view_set_model(GTK_TREE_VIEW(view), NULL);
   gtk_list_store_clear(GTK_LIST_STORE(listmodel));
-  
+  gtk_widget_hide(GTK_WIDGET(d->scrolledwindow));
+  gtk_widget_hide(GTK_WIDGET(d->sw2));
 
-  
+  set_properties (dr);
+
   char query[1024];
   int property = gtk_combo_box_get_active(dr->combo);
-  const gchar *text = gtk_entry_get_text(GTK_ENTRY(dr->text));
-  gchar *escaped_text = dt_util_str_replace(text, "'", "''");
-  char confname[200];
-  snprintf(confname, 200, "plugins/lighttable/collect/string%1ld", dr->num);
-  dt_conf_set_string (confname, text);
-  snprintf(confname, 200, "plugins/lighttable/collect/item%1ld", dr->num);
-  dt_conf_set_int (confname, property);
+  const gchar *text = NULL;
+  text = gtk_entry_get_text(GTK_ENTRY(dr->text));
+  gchar *escaped_text = NULL;
+
+  escaped_text = dt_util_str_replace(text, "'", "''");
 
   switch(property)
   {
-    case 0: // film roll
-      goto filmroll;
+    case DT_COLLECTION_PROP_FILMROLL: // film roll
+      snprintf(query, 1024, "select distinct folder, id from film_rolls where folder like '%%%s%%'  order by folder desc", escaped_text);
       break;
-    case 1: // camera
+    case DT_COLLECTION_PROP_CAMERA: // camera
       snprintf(query, 1024, "select distinct maker || ' ' || model as model, 1 from images where maker || ' ' || model like '%%%s%%' order by model", escaped_text);
       break;
-    case 2: // tag
+    case DT_COLLECTION_PROP_TAG: // tag
       snprintf(query, 1024, "SELECT distinct name, id FROM tags WHERE name LIKE '%%%s%%' ORDER BY UPPER(name)", escaped_text);
       break;
-    case 4: // History, 2 hardcoded alternatives
+    case DT_COLLECTION_PROP_HISTORY: // History, 2 hardcoded alternatives
       gtk_list_store_append(GTK_LIST_STORE(listmodel), &iter);
       gtk_list_store_set (GTK_LIST_STORE(listmodel), &iter,
                           DT_LIB_COLLECT_COL_TEXT,_("altered"),
@@ -1007,7 +1214,7 @@ changed_callback (GtkEntry *entry, dt_lib_collect_rule_t *dr)
       goto entry_key_press_exit;
       break;
 
-    case 5: // colorlabels
+    case DT_COLLECTION_PROP_COLORLABEL: // colorlabels
       gtk_list_store_append(GTK_LIST_STORE(listmodel), &iter);
       gtk_list_store_set (GTK_LIST_STORE(listmodel), &iter,
                           DT_LIB_COLLECT_COL_TEXT,_("red"),
@@ -1043,45 +1250,53 @@ changed_callback (GtkEntry *entry, dt_lib_collect_rule_t *dr)
 
       // TODO: Add empty string for metadata?
       // TODO: Autogenerate this code?
-    case 6: // title
+    case DT_COLLECTION_PROP_TITLE: // title
       snprintf(query, 1024, "select distinct value, 1 from meta_data where key = %d and value like '%%%s%%' order by value",
                DT_METADATA_XMP_DC_TITLE, escaped_text);
       break;
-    case 7: // description
+    case DT_COLLECTION_PROP_DESCRIPTION: // description
       snprintf(query, 1024, "select distinct value, 1 from meta_data where key = %d and value like '%%%s%%' order by value",
                DT_METADATA_XMP_DC_DESCRIPTION, escaped_text);
       break;
-    case 8: // creator
+    case DT_COLLECTION_PROP_CREATOR: // creator
       snprintf(query, 1024, "select distinct value, 1 from meta_data where key = %d and value like '%%%s%%' order by value",
                DT_METADATA_XMP_DC_CREATOR, escaped_text);
       break;
-    case 9: // publisher
+    case DT_COLLECTION_PROP_PUBLISHER: // publisher
       snprintf(query, 1024, "select distinct value, 1 from meta_data where key = %d and value like '%%%s%%' order by value",
                DT_METADATA_XMP_DC_PUBLISHER, escaped_text);
       break;
-    case 10: // rights
+    case DT_COLLECTION_PROP_RIGHTS: // rights
       snprintf(query, 1024, "select distinct value, 1 from meta_data where key = %d and value like '%%%s%%'order by value ",
                DT_METADATA_XMP_DC_RIGHTS, escaped_text);
       break;
-    case 11: // lens
+    case DT_COLLECTION_PROP_LENS: // lens
       snprintf(query, 1024, "select distinct lens, 1 from images where lens like '%%%s%%' order by lens", escaped_text);
       break;
-    case 12: // iso
+    case DT_COLLECTION_PROP_ISO: // iso
       snprintf(query, 1024, "select distinct cast(iso as integer) as iso, 1 from images where iso like '%%%s%%' order by iso", escaped_text);
       break;
-    case 13: // aperature
+    case DT_COLLECTION_PROP_APERTURE: // aperture
       snprintf(query, 1024, "select distinct round(aperture,1) as aperture, 1 from images where aperture like '%%%s%%' order by aperture", escaped_text);
       break;
-    case 14: // filename
+    case DT_COLLECTION_PROP_FILENAME: // filename
       snprintf(query, 1024, "select distinct filename, 1 from images where filename like '%%%s%%' order by filename", escaped_text);
       break;
 
-    default: // case 3: // day
+    case DT_COLLECTION_PROP_FOLDERS: // folders
+    // We shouldn't ever be here
+      break;
+
+    case DT_COLLECTION_PROP_DAY:
+      snprintf(query, 1024, "SELECT DISTINCT substr(datetime_taken, 1, 10), 1 FROM images WHERE datetime_taken LIKE '%%%s%%' ORDER BY datetime_taken DESC", escaped_text);
+      break;
+
+    default: // time
       snprintf(query, 1024, "SELECT DISTINCT datetime_taken, 1 FROM images WHERE datetime_taken LIKE '%%%s%%' ORDER BY datetime_taken DESC", escaped_text);
       break;
   }
   g_free(escaped_text);
-  
+
   DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), query, -1, &stmt, NULL);
   while(sqlite3_step(stmt) == SQLITE_ROW)
   {
@@ -1104,14 +1319,41 @@ changed_callback (GtkEntry *entry, dt_lib_collect_rule_t *dr)
 
   goto entry_key_press_exit;
 
-filmroll:
-  /* TODO: Only create a new tree if something has changed
-   * This will allow to cache the node, and not collapse the tree */
+entry_key_press_exit:
+  gtk_tree_view_set_tooltip_column(GTK_TREE_VIEW(view), DT_LIB_COLLECT_COL_TOOLTIP);
+  gtk_tree_view_set_model(GTK_TREE_VIEW(view), listmodel);
+  gtk_widget_set_no_show_all(GTK_WIDGET(d->scrolledwindow), FALSE);
+  gtk_widget_show_all(GTK_WIDGET(d->scrolledwindow));
+  g_object_unref(listmodel);
+}
+
+static void
+update_view (GtkEntry *entry, dt_lib_collect_rule_t *dr)
+{
+  int property = gtk_combo_box_get_active(dr->combo);
+
+  if (property == DT_COLLECTION_PROP_FOLDERS)
+    folders_view(dr);
+  else
+    list_view(dr);
+}
+
+static void
+create_folders_gui (dt_lib_collect_rule_t *dr)
+{
+  GtkTreeView *tree;
+  GtkTreeModel *treemodel;
+  GtkTreeIter iter;
+  dt_lib_collect_t *d = get_collect(dr);
+
+  dt_lib_collect_rule_t *rule = NULL;
+
   treemodel = d->treemodel;
 
   if (d->tree_new)
   {
     /* We have already inited the GUI once, clean around */
+#if 0
     if (d->labels != NULL)
     {
       for (int i=0; i<d->labels->len; i++)
@@ -1121,37 +1363,43 @@ filmroll:
       }
       d->labels = NULL;
     }
-     
+#endif
+
     if (d->trees != NULL)
     {
-      for (int i=0; i<d->trees->len; i++)
+      for (guint i=0; i<d->trees->len; i++)
       {
         tree = GTK_TREE_VIEW(g_ptr_array_index (d->trees, i));
         g_ptr_array_free(d->trees, TRUE);
       }
       d->trees = NULL;
     }
+
     /* set the UI */
     GtkTreeModel *model2;
-    
-    GtkTreePath *root = gtk_tree_path_new_first();
-    gtk_tree_model_get_iter (GTK_TREE_MODEL(treemodel), &iter, root);
 
+    GtkTreePath *root = gtk_tree_path_new_first();
+    if(!gtk_tree_model_get_iter (GTK_TREE_MODEL(treemodel), &iter, root))
+      // something went wrong, get out.
+      return;
+    int children = 1; // To be deleted if the following code in enabled
+#if 0
     int children = gtk_tree_model_iter_n_children(GTK_TREE_MODEL(treemodel), NULL);
     d->labels = g_ptr_array_sized_new(children);
     g_ptr_array_set_free_func (d->labels, destroy_widget);
-
+#endif
     d->trees = g_ptr_array_sized_new(children);
     g_ptr_array_set_free_func (d->trees, destroy_widget);
 
     for (int i=0; i<children; i++)
     {
+#if 0
       GValue value;
       memset(&value,0,sizeof(GValue));
       gtk_tree_model_iter_nth_child (GTK_TREE_MODEL(treemodel), &iter, NULL, i);
 
       gtk_tree_model_get_value (GTK_TREE_MODEL(treemodel), &iter, 0, &value);
-      
+
       gchar *mount_name = g_value_dup_string(&value);
 
       if (g_strcmp0(mount_name, "Local")==0)
@@ -1163,40 +1411,38 @@ filmroll:
         label = gtk_label_new (g_ascii_strdown(mount_name, strlen(mount_name)));
       }
       g_ptr_array_add(d->labels, (gpointer) label);
-      gtk_container_add(GTK_CONTAINER(d->box), GTK_WIDGET(label));
-      
-      model2 = _create_filtered_model(GTK_TREE_MODEL(treemodel), iter);
+      gtk_box_pack_start(d->box, GTK_WIDGET(label), FALSE, FALSE, 0);
+      gtk_widget_show (label);
+#endif
+      /* Only pass a rule (and filter the tree) if the typing property is TRUE */
+      if (dr->typing != FALSE)
+        rule = dr;
+      model2 = _create_filtered_model(GTK_TREE_MODEL(treemodel), iter, rule);
       tree = _create_treeview_display(GTK_TREE_MODEL(model2));
       g_ptr_array_add(d->trees, (gpointer) tree);
-      gtk_container_add(GTK_CONTAINER(d->box), GTK_WIDGET(tree));
+      gtk_box_pack_start(d->box, GTK_WIDGET(tree), FALSE, FALSE, 0);
+      gtk_widget_show (GTK_WIDGET(tree));
 
       gtk_tree_view_set_headers_visible(tree, FALSE);
 
-      gtk_tree_selection_set_mode(gtk_tree_view_get_selection(view), GTK_SELECTION_SINGLE);
-      
+      gtk_tree_selection_set_mode(gtk_tree_view_get_selection(tree), GTK_SELECTION_SINGLE);
+
+      gtk_tree_view_set_enable_search(tree, TRUE);
+      gtk_tree_view_set_search_column (tree, DT_LIB_COLLECT_COL_PATH);
+
       g_signal_connect(G_OBJECT (tree), "row-activated", G_CALLBACK (row_activated), d);
       g_signal_connect(G_OBJECT (tree), "button-press-event", G_CALLBACK (view_onButtonPressed), NULL);
       g_signal_connect(G_OBJECT (tree), "popup-menu", G_CALLBACK (view_onPopupMenu), NULL);
-      
+
+#if 0
       g_value_unset(&value);
       g_free(mount_name);
+#endif
       d->tree_new = FALSE;
     }
   }
-
-  gtk_widget_show_all(GTK_WIDGET(d->box));
-  g_object_unref(listmodel);
-
-  return FALSE;
-
-entry_key_press_exit:
-  gtk_tree_view_set_tooltip_column(GTK_TREE_VIEW(view), DT_LIB_COLLECT_COL_TOOLTIP);
-  gtk_tree_view_set_model(GTK_TREE_VIEW(view), listmodel);
-  g_signal_connect(G_OBJECT (view), "row-activated", G_CALLBACK (row_activated), d);
-  gtk_widget_show_all(GTK_WIDGET(d->scrolledwindow));
-  g_object_unref(listmodel);
-  return FALSE;
 }
+
 
 static void
 _lib_collect_gui_update (dt_lib_module_t *self)
@@ -1205,8 +1451,13 @@ _lib_collect_gui_update (dt_lib_module_t *self)
 
   const int old = darktable.gui->reset;
   darktable.gui->reset = 1;
-  const int active = CLAMP(dt_conf_get_int("plugins/lighttable/collect/num_rules") - 1, 0, (MAX_RULES-1));
+  const int _a = dt_conf_get_int("plugins/lighttable/collect/num_rules") - 1;
+  const int active = CLAMP(_a, 0, (MAX_RULES-1));
   char confname[200];
+
+  gtk_widget_set_no_show_all(GTK_WIDGET(d->scrolledwindow), TRUE);
+  gtk_widget_set_no_show_all(GTK_WIDGET(d->sw2), TRUE);
+
   for(int i=0; i<MAX_RULES; i++)
   {
     gtk_widget_set_no_show_all(d->rule[i].hbox, TRUE);
@@ -1223,8 +1474,14 @@ _lib_collect_gui_update (dt_lib_module_t *self)
     gchar *text = dt_conf_get_string(confname);
     if(text)
     {
+      g_signal_handlers_block_matched (d->rule[i].text, G_SIGNAL_MATCH_FUNC, 0, 0 , NULL, update_view, NULL);
+      g_signal_handlers_block_matched (d->rule[i].text, G_SIGNAL_MATCH_FUNC, 0, 0 , NULL, entry_changed, NULL);
       gtk_entry_set_text(GTK_ENTRY(d->rule[i].text), text);
+      gtk_editable_set_position(GTK_EDITABLE(d->rule[i].text), -1);
+      g_signal_handlers_unblock_matched (d->rule[i].text, G_SIGNAL_MATCH_FUNC, 0, 0 , NULL, update_view, NULL);
+      g_signal_handlers_unblock_matched (d->rule[i].text, G_SIGNAL_MATCH_FUNC, 0, 0 , NULL, entry_changed, NULL);
       g_free(text);
+      d->rule[i].typing = FALSE;
     }
 
     GtkDarktableButton *button = DTGTK_BUTTON(d->rule[i].button);
@@ -1250,9 +1507,9 @@ _lib_collect_gui_update (dt_lib_module_t *self)
     }
   }
 
-
   // update list of proposals
-  changed_callback(NULL, d->rule + d->active_rule);
+  create_folders_gui (d->rule + d->active_rule);
+  update_view(NULL, d->rule + d->active_rule);
   darktable.gui->reset = old;
 }
 
@@ -1260,8 +1517,8 @@ void
 gui_reset (dt_lib_module_t *self)
 {
   dt_conf_set_int("plugins/lighttable/collect/num_rules", 1);
-  dt_conf_set_int("plugins/lighttable/collect/item0", 0);
-  dt_conf_set_string("plugins/lighttable/collect/string0", "%");
+  dt_conf_set_int("plugins/lighttable/collect/item0", DT_COLLECTION_PROP_FILMROLL);
+  dt_conf_set_string("plugins/lighttable/collect/string0", "");
   dt_collection_set_query_flags(darktable.collection,COLLECTION_QUERY_FULL);
   dt_collection_update_query(darktable.collection);
 }
@@ -1270,10 +1527,22 @@ static void
 combo_changed (GtkComboBox *combo, dt_lib_collect_rule_t *d)
 {
   if(darktable.gui->reset) return;
+  g_signal_handlers_block_matched (d->text, G_SIGNAL_MATCH_FUNC, 0, 0 , NULL, entry_changed, NULL);
   gtk_entry_set_text(GTK_ENTRY(d->text), "");
+  g_signal_handlers_unblock_matched (d->text, G_SIGNAL_MATCH_FUNC, 0, 0 , NULL, entry_changed, NULL);
   dt_lib_collect_t *c = get_collect(d);
   c->active_rule = d->num;
-  changed_callback(NULL, d);
+
+  int property = gtk_combo_box_get_active(d->combo);
+
+  if (property == DT_COLLECTION_PROP_FOLDERS)
+  {
+    d->typing = FALSE;
+    refilter(c->treemodel, d);
+  }
+
+
+  update_view(NULL, d);
   dt_collection_update_query(darktable.collection);
 }
 
@@ -1283,17 +1552,27 @@ row_activated (GtkTreeView *view, GtkTreePath *path, GtkTreeViewColumn *col, dt_
   GtkTreeIter iter;
   GtkTreeModel *model = NULL;
   GtkTreeSelection *selection = gtk_tree_view_get_selection(GTK_TREE_VIEW(view));
+
   if(!gtk_tree_selection_get_selected(selection, &model, &iter)) return;
   gchar *text;
+
   const int active = d->active_rule;
+  d->rule[active].typing = FALSE;
+
   const int item = gtk_combo_box_get_active(GTK_COMBO_BOX(d->rule[active].combo));
-  if(item == 0) // get full path for film rolls:
+  if(item == DT_COLLECTION_PROP_FILMROLL || // get full path for film rolls
+     item == DT_COLLECTION_PROP_FOLDERS)    // or folders
     gtk_tree_model_get (model, &iter, DT_LIB_COLLECT_COL_PATH, &text, -1);
   else
     gtk_tree_model_get (model, &iter, DT_LIB_COLLECT_COL_TEXT, &text, -1);
+
+  g_signal_handlers_block_matched (d->rule[active].text, G_SIGNAL_MATCH_FUNC, 0, 0 , NULL, entry_changed, NULL);
   gtk_entry_set_text(GTK_ENTRY(d->rule[active].text), text);
+  gtk_editable_set_position(GTK_EDITABLE(d->rule[active].text), -1);
+  g_signal_handlers_unblock_matched (d->rule[active].text, G_SIGNAL_MATCH_FUNC, 0, 0 , NULL, entry_changed, NULL);
   g_free(text);
-  changed_callback(NULL, d->rule + active);
+
+  update_view(NULL, d->rule + active);
   dt_collection_update_query(darktable.collection);
   dt_control_queue_redraw_center();
 }
@@ -1301,11 +1580,26 @@ row_activated (GtkTreeView *view, GtkTreePath *path, GtkTreeViewColumn *col, dt_
 static void
 entry_activated (GtkWidget *entry, dt_lib_collect_rule_t *d)
 {
-  changed_callback(NULL, d);
+  GtkTreeView *view;
+  GtkTreeModel *model;
+  int property, rows;
+
+  update_view(NULL, d);
   dt_lib_collect_t *c = get_collect(d);
-  GtkTreeView *view = c->view;
-  GtkTreeModel *model = gtk_tree_view_get_model(GTK_TREE_VIEW(view));
-  gint rows = gtk_tree_model_iter_n_children(model, NULL);
+
+  property = gtk_combo_box_get_active(d->combo);
+
+  if (property != DT_COLLECTION_PROP_FOLDERS)
+  {
+    view = c->view;
+    model = gtk_tree_view_get_model(GTK_TREE_VIEW(view));
+  }
+  else
+  {
+    model = c->treemodel;
+  }
+
+  rows = gtk_tree_model_iter_n_children(model, NULL);
   if(rows == 1)
   {
     GtkTreeIter iter;
@@ -1313,16 +1607,28 @@ entry_activated (GtkWidget *entry, dt_lib_collect_rule_t *d)
     {
       gchar *text;
       const int item = gtk_combo_box_get_active(GTK_COMBO_BOX(d->combo));
-      if(item == 0) // get full path for film rolls:
+      if(item == DT_COLLECTION_PROP_FILMROLL || // get full path for film rolls
+         item == DT_COLLECTION_PROP_FOLDERS)    // or folders
         gtk_tree_model_get (model, &iter, DT_LIB_COLLECT_COL_PATH, &text, -1);
       else
         gtk_tree_model_get (model, &iter, DT_LIB_COLLECT_COL_TEXT, &text, -1);
+
+      g_signal_handlers_block_matched (d->text, G_SIGNAL_MATCH_FUNC, 0, 0 , NULL, entry_changed, NULL);
       gtk_entry_set_text(GTK_ENTRY(d->text), text);
+      gtk_editable_set_position(GTK_EDITABLE(d->text), -1);
+      g_signal_handlers_unblock_matched (d->text, G_SIGNAL_MATCH_FUNC, 0, 0 , NULL, entry_changed, NULL);
       g_free(text);
-      changed_callback(NULL, d);
+      d->typing = FALSE;
+      update_view(NULL, d);
     }
   }
   dt_collection_update_query(darktable.collection);
+}
+
+static void
+entry_changed (GtkWidget *entry, gchar *new_text, gint new_length, gpointer *position, dt_lib_collect_rule_t *d)
+{
+  d->typing = TRUE;
 }
 
 int
@@ -1336,7 +1642,7 @@ entry_focus_in_callback (GtkWidget *w, GdkEventFocus *event, dt_lib_collect_rule
 {
   dt_lib_collect_t *c = get_collect(d);
   c->active_rule = d->num;
-  changed_callback(NULL, c->rule + c->active_rule);
+  update_view(NULL, c->rule + c->active_rule);
 }
 
 #if 0
@@ -1368,7 +1674,8 @@ static void
 menuitem_and (GtkMenuItem *menuitem, dt_lib_collect_rule_t *d)
 {
   // add next row with and operator
-  const int active = CLAMP(dt_conf_get_int("plugins/lighttable/collect/num_rules"), 1, MAX_RULES);
+  const int _a = dt_conf_get_int("plugins/lighttable/collect/num_rules");
+  const int active = CLAMP(_a, 1, MAX_RULES);
   if(active < 10)
   {
     char confname[200];
@@ -1387,7 +1694,8 @@ static void
 menuitem_or (GtkMenuItem *menuitem, dt_lib_collect_rule_t *d)
 {
   // add next row with or operator
-  const int active = CLAMP(dt_conf_get_int("plugins/lighttable/collect/num_rules"), 1, MAX_RULES);
+  const int _a = dt_conf_get_int("plugins/lighttable/collect/num_rules");
+  const int active = CLAMP(_a, 1, MAX_RULES);
   if(active < 10)
   {
     char confname[200];
@@ -1396,6 +1704,8 @@ menuitem_or (GtkMenuItem *menuitem, dt_lib_collect_rule_t *d)
     snprintf(confname, 200, "plugins/lighttable/collect/string%1d", active);
     dt_conf_set_string(confname, "");
     dt_conf_set_int("plugins/lighttable/collect/num_rules", active+1);
+    dt_lib_collect_t *c = get_collect(d);
+    c->active_rule = active;
   }
   dt_collection_update_query(darktable.collection);
 }
@@ -1404,7 +1714,8 @@ static void
 menuitem_and_not (GtkMenuItem *menuitem, dt_lib_collect_rule_t *d)
 {
   // add next row with and not operator
-  const int active = CLAMP(dt_conf_get_int("plugins/lighttable/collect/num_rules"), 1, MAX_RULES);
+  const int _a = dt_conf_get_int("plugins/lighttable/collect/num_rules");
+  const int active = CLAMP(_a, 1, MAX_RULES);
   if(active < 10)
   {
     char confname[200];
@@ -1413,6 +1724,8 @@ menuitem_and_not (GtkMenuItem *menuitem, dt_lib_collect_rule_t *d)
     snprintf(confname, 200, "plugins/lighttable/collect/string%1d", active);
     dt_conf_set_string(confname, "");
     dt_conf_set_int("plugins/lighttable/collect/num_rules", active+1);
+    dt_lib_collect_t *c = get_collect(d);
+    c->active_rule = active;
   }
   dt_collection_update_query(darktable.collection);
 }
@@ -1460,31 +1773,71 @@ menuitem_change_and_not (GtkMenuItem *menuitem, dt_lib_collect_rule_t *d)
 }
 
 static void
-collection_updated(gpointer instance,gpointer self)
+collection_updated(gpointer instance, gpointer self)
 {
-  _lib_collect_gui_update((dt_lib_module_t *)self);
+  _lib_collect_gui_update(self);
 }
+
 
 static void
 filmrolls_updated(gpointer instance, gpointer self)
 {
+//  dt_lib_module_t *dm = (dt_lib_module_t *)self;
+
+//  dt_lib_collect_t *d = (dt_lib_collect_t *)dm->data;
+//  int active = d->active_rule;
+
+  //TODO: We should update the count of images here
+  _lib_collect_gui_update(self);
+}
+
+static void
+filmrolls_imported(gpointer instance, gpointer self)
+{
   dt_lib_module_t *dm = (dt_lib_module_t *)self;
 
   dt_lib_collect_t *d = (dt_lib_collect_t *)dm->data;
-
+  int active = 0;
+  d->active_rule = active;
 
   // update tree
   d->treemodel = GTK_TREE_MODEL(_folder_tree());
   d->tree_new = TRUE;
-  _lib_collect_gui_update((dt_lib_module_t *)self);
+  d->rule[active].typing = FALSE;
+
+  // reset active rules
+  dt_conf_set_int("plugins/lighttable/collect/num_rules", 1);
+  dt_conf_set_int("plugins/lighttable/collect/item0", DT_COLLECTION_PROP_FILMROLL);
+  _lib_collect_gui_update(self);
 }
 
+static void
+filmrolls_removed(gpointer instance, gpointer self)
+{
+  dt_lib_module_t *dm = (dt_lib_module_t *)self;
+
+  dt_lib_collect_t *d = (dt_lib_collect_t *)dm->data;
+  int active = 0;
+  d->active_rule = active;
+
+  // update tree
+  d->treemodel = GTK_TREE_MODEL(_folder_tree());
+  d->tree_new = TRUE;
+  d->rule[active].typing = FALSE;
+
+  // reset active rules
+  dt_conf_set_int("plugins/lighttable/collect/num_rules", 1);
+  dt_conf_set_int("plugins/lighttable/collect/item0", DT_COLLECTION_PROP_FILMROLL);
+  dt_conf_set_string("plugins/lighttable/collect/string0", "");
+  _lib_collect_gui_update(self);
+}
 
 static void
 menuitem_clear (GtkMenuItem *menuitem, dt_lib_collect_rule_t *d)
 {
   // remove this row, or if 1st, clear text entry box
-  const int active = CLAMP(dt_conf_get_int("plugins/lighttable/collect/num_rules"), 1, MAX_RULES);
+  const int _a = dt_conf_get_int("plugins/lighttable/collect/num_rules");
+  const int active = CLAMP(_a, 1, MAX_RULES);
   dt_lib_collect_t *c = get_collect(d);
   if(active > 1)
   {
@@ -1496,6 +1849,9 @@ menuitem_clear (GtkMenuItem *menuitem, dt_lib_collect_rule_t *d)
     dt_conf_set_int("plugins/lighttable/collect/mode0", DT_LIB_COLLECT_MODE_AND);
     dt_conf_set_int("plugins/lighttable/collect/item0", 0);
     dt_conf_set_string("plugins/lighttable/collect/string0", "");
+    d->typing = FALSE;
+    gtk_combo_box_set_active (d->combo, 0);
+    gtk_entry_set_text (GTK_ENTRY(d->text), "");
   }
   // move up all still active rules by one.
   for(int i=d->num; i<MAX_RULES-1; i++)
@@ -1518,6 +1874,8 @@ menuitem_clear (GtkMenuItem *menuitem, dt_lib_collect_rule_t *d)
       g_free(string);
     }
   }
+  refilter (c->treemodel, d);
+
   dt_collection_update_query(darktable.collection);
 }
 
@@ -1528,7 +1886,8 @@ popup_button_callback(GtkWidget *widget, GdkEventButton *event, dt_lib_collect_r
 
   GtkWidget *menu = gtk_menu_new();
   GtkWidget *mi;
-  const int active = CLAMP(dt_conf_get_int("plugins/lighttable/collect/num_rules"), 1, MAX_RULES);
+  const int _a = dt_conf_get_int("plugins/lighttable/collect/num_rules");
+  const int active = CLAMP(_a, 1, MAX_RULES);
 
   mi = gtk_menu_item_new_with_label(_("clear this rule"));
   gtk_menu_shell_append(GTK_MENU_SHELL(menu), mi);
@@ -1582,22 +1941,13 @@ gui_init (dt_lib_module_t *self)
   d->active_rule = 0;
   d->params = (dt_lib_collect_params_t*)malloc(sizeof(dt_lib_collect_params_t));
 
-  dt_control_signal_connect(darktable.signals, 
-			    DT_SIGNAL_COLLECTION_CHANGED,
-			    G_CALLBACK(collection_updated),
-			    self);
-  
-  dt_control_signal_connect(darktable.signals, 
-			    DT_SIGNAL_FILMROLLS_CHANGED,
-			    G_CALLBACK(filmrolls_updated),
-			    self);
-  
   GtkBox *box;
   GtkWidget *w;
 
   for(int i=0; i<MAX_RULES; i++)
   {
     d->rule[i].num = i;
+    d->rule[i].typing = FALSE;
     box = GTK_BOX(gtk_hbox_new(FALSE, 5));
     d->rule[i].hbox = GTK_WIDGET(box);
     gtk_box_pack_start(GTK_BOX(self->widget), GTK_WIDGET(box), TRUE, TRUE, 0);
@@ -1608,15 +1958,16 @@ gui_init (dt_lib_module_t *self)
     g_signal_connect(G_OBJECT(w), "changed", G_CALLBACK(combo_changed), d->rule + i);
     gtk_box_pack_start(box, w, FALSE, FALSE, 0);
     w = gtk_entry_new();
-    dt_gui_key_accel_block_on_focus(w);
     d->rule[i].text = w;
+    dt_gui_key_accel_block_on_focus_connect(d->rule[i].text);
     gtk_widget_add_events(w, GDK_FOCUS_CHANGE_MASK);
     g_signal_connect(G_OBJECT(w), "focus-in-event", G_CALLBACK(entry_focus_in_callback), d->rule + i);
 
     /* xgettext:no-c-format */
     g_object_set(G_OBJECT(w), "tooltip-text", _("type your query, use `%' as wildcard"), (char *)NULL);
     gtk_widget_add_events(w, GDK_KEY_PRESS_MASK);
-    g_signal_connect(G_OBJECT(w), "changed", G_CALLBACK(changed_callback), d->rule + i);
+    g_signal_connect(G_OBJECT(w), "insert-text", G_CALLBACK(entry_changed), d->rule + i);
+    g_signal_connect(G_OBJECT(w), "changed", G_CALLBACK(update_view), d->rule + i);
     g_signal_connect(G_OBJECT(w), "activate", G_CALLBACK(entry_activated), d->rule + i);
     gtk_box_pack_start(box, w, TRUE, TRUE, 0);
     w = dtgtk_button_new(dtgtk_cairo_paint_presets, CPF_STYLE_FLAT|CPF_DO_NOT_USE_BORDER);
@@ -1635,24 +1986,30 @@ gui_init (dt_lib_module_t *self)
   gtk_tree_view_set_headers_visible(view, FALSE);
   gtk_widget_set_size_request(GTK_WIDGET(view), -1, 300);
   gtk_container_add(GTK_CONTAINER(sw), GTK_WIDGET(view));
-  
+  g_signal_connect(G_OBJECT (view), "row-activated", G_CALLBACK (row_activated), d);
+
   GtkTreeViewColumn *col = gtk_tree_view_column_new();
   gtk_tree_view_append_column(view, col);
   GtkCellRenderer *renderer = gtk_cell_renderer_text_new();
   gtk_tree_view_column_pack_start(col, renderer, TRUE);
   gtk_tree_view_column_add_attribute(col, renderer, "text", DT_LIB_COLLECT_COL_TEXT);
 
-  GtkTreeModel *listmodel = GTK_TREE_MODEL(gtk_list_store_new(DT_LIB_COLLECT_NUM_COLS, G_TYPE_STRING, G_TYPE_UINT, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_UINT));
+  GtkTreeModel *listmodel = GTK_TREE_MODEL(gtk_list_store_new(DT_LIB_COLLECT_NUM_COLS, G_TYPE_STRING, G_TYPE_UINT, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_UINT, G_TYPE_BOOLEAN));
   d->listmodel = listmodel;
-  
+
   gtk_box_pack_start(GTK_BOX(self->widget), GTK_WIDGET(sw), TRUE, TRUE, 0);
-  gtk_widget_hide(sw);
 
 
   GtkWidget *vbox = gtk_vbox_new(FALSE, 5);
   d->box = GTK_BOX(vbox);
-  gtk_box_pack_start(GTK_BOX(self->widget), GTK_WIDGET(d->box), TRUE, TRUE, 0);
-  gtk_widget_hide(vbox);
+
+  GtkWidget *sw2 = gtk_scrolled_window_new(NULL, NULL);
+  d->sw2 = GTK_SCROLLED_WINDOW (sw2);
+  gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sw2), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+  gtk_scrolled_window_add_with_viewport(GTK_SCROLLED_WINDOW(sw2), GTK_WIDGET(d->box));
+  gtk_widget_set_size_request(GTK_WIDGET(sw2), -1, 300);
+
+  gtk_box_pack_start(GTK_BOX(self->widget), GTK_WIDGET(sw2), TRUE, TRUE, 0);
 
   d->labels = NULL;
   d->trees = NULL;
@@ -1663,7 +2020,7 @@ gui_init (dt_lib_module_t *self)
 
   /* set the monitor */
   /* TODO: probably we should be using the same for the import code */
-  d->gv_monitor = g_volume_monitor_get ();
+//  d->gv_monitor = g_volume_monitor_get ();
 //  g_signal_connect(G_OBJECT(d->gv_monitor), "mount-added", G_CALLBACK(mount_changed), self);
 //  g_signal_connect(G_OBJECT(d->gv_monitor), "mount-removed", G_CALLBACK(mount_changed), self);
 //  g_signal_connect(G_OBJECT(d->gv_monitor), "mount-changed", G_CALLBACK(mount_changed), self);
@@ -1672,25 +2029,49 @@ gui_init (dt_lib_module_t *self)
   d->treemodel = GTK_TREE_MODEL(_folder_tree());
   d->tree_new = TRUE;
   _lib_collect_gui_update(self);
+
+  dt_control_signal_connect(darktable.signals,
+                           DT_SIGNAL_COLLECTION_CHANGED,
+                           G_CALLBACK(collection_updated),
+                           self);
+
+  dt_control_signal_connect(darktable.signals,
+                           DT_SIGNAL_FILMROLLS_CHANGED,
+                           G_CALLBACK(filmrolls_updated),
+                           self);
+
+  dt_control_signal_connect(darktable.signals,
+                           DT_SIGNAL_FILMROLLS_IMPORTED,
+                           G_CALLBACK(filmrolls_imported),
+                           self);
+
+  dt_control_signal_connect(darktable.signals,
+                           DT_SIGNAL_FILMROLLS_REMOVED,
+                           G_CALLBACK(filmrolls_removed),
+                           self);
 }
 
 void
 gui_cleanup (dt_lib_module_t *self)
 {
-  dt_lib_module_t *dm = (dt_lib_module_t *)self;
-  dt_lib_collect_t *d = (dt_lib_collect_t *)dm->data;
-  
+  dt_lib_collect_t *d = (dt_lib_collect_t *)self->data;
+
+  for(int i=0; i<MAX_RULES; i++)
+    dt_gui_key_accel_block_on_focus_disconnect(d->rule[i].text);
+
   dt_control_signal_disconnect(darktable.signals, G_CALLBACK(collection_updated), self);
   dt_control_signal_disconnect(darktable.signals, G_CALLBACK(filmrolls_updated), self);
+  dt_control_signal_disconnect(darktable.signals, G_CALLBACK(filmrolls_imported), self);
   darktable.view_manager->proxy.module_collect.module = NULL;
   g_free(((dt_lib_collect_t*)self->data)->params);
-  
+
   /* cleanup mem */
-  g_ptr_array_free(d->labels, TRUE);
-  g_ptr_array_free(d->trees, TRUE);
+  //g_ptr_array_free(d->labels, TRUE);
+  if (d->trees != NULL)
+    g_ptr_array_free(d->trees, TRUE);
 
   /* TODO: Make sure we are cleaning up all allocations */
-  
+
   g_free(self->data);
   self->data = NULL;
 }

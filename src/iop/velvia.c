@@ -313,7 +313,7 @@ void init(dt_iop_module_t *module)
   module->params = malloc(sizeof(dt_iop_velvia_params_t));
   module->default_params = malloc(sizeof(dt_iop_velvia_params_t));
   module->default_enabled = 0;
-  module->priority = 862; // module order created by iop_dependencies.py, do not edit!
+  module->priority = 854; // module order created by iop_dependencies.py, do not edit!
   module->params_size = sizeof(dt_iop_velvia_params_t);
   module->gui_data = NULL;
   dt_iop_velvia_params_t tmp = (dt_iop_velvia_params_t)
@@ -347,7 +347,7 @@ void gui_init(struct dt_iop_module_t *self)
   g_object_set(G_OBJECT(g->strength_scale), "tooltip-text", _("the strength of saturation boost"), (char *)NULL);
   g_signal_connect (G_OBJECT (g->strength_scale), "value-changed",
                     G_CALLBACK (strength_callback), self);
-  
+
   /* bias */
   g->bias_scale = dt_bauhaus_slider_new_with_range(self, 0.0, 1.0, 0.01, p->bias, 2);
   dt_bauhaus_widget_set_label(g->bias_scale,_("mid-tones bias"));

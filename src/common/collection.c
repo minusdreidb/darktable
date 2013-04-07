@@ -86,7 +86,7 @@ dt_collection_update (const dt_collection_t *collection)
   if (!(collection->params.query_flags&COLLECTION_QUERY_USE_ONLY_WHERE_EXT))
   {
     int need_operator = 0;
-     
+
     /* add default filters */
     if (collection->params.filter_flags & COLLECTION_FILTER_FILM_ID)
     {
@@ -116,7 +116,7 @@ dt_collection_update (const dt_collection_t *collection)
   /* grouping */
   if(darktable.gui && darktable.gui->grouping)
   {
-    wq = dt_util_dstrcat(wq, " and group_id = id or group_id = %d", darktable.gui->expanded_group_id);
+    wq = dt_util_dstrcat(wq, " and (group_id = id or group_id = %d)", darktable.gui->expanded_group_id);
   }
 
   /* build select part includes where */
@@ -265,65 +265,65 @@ dt_collection_get_sort_descending(const dt_collection_t *collection)
   return collection->params.descending;
 }
 
-gchar *  
+gchar *
 dt_collection_get_sort_query(const dt_collection_t *collection)
-{ 
+{
   gchar *sq = NULL;
 
   switch(collection->params.sort)
   {
     case DT_COLLECTION_SORT_DATETIME:
       sq = dt_util_dstrcat(sq, ORDER_BY_QUERY, "datetime_taken");
-    break;
- 
+      break;
+
     case DT_COLLECTION_SORT_RATING:
       sq = dt_util_dstrcat(sq, ORDER_BY_QUERY, "flags & 7 desc");
-    break;
+      break;
 
     case DT_COLLECTION_SORT_FILENAME:
       sq = dt_util_dstrcat(sq, ORDER_BY_QUERY, "filename");
-    break;
+      break;
 
     case DT_COLLECTION_SORT_ID:
       sq = dt_util_dstrcat(sq, ORDER_BY_QUERY, "id");
-    break;
+      break;
 
     case DT_COLLECTION_SORT_COLOR:
       sq = dt_util_dstrcat(sq, ORDER_BY_QUERY, "color desc, filename");
-    break;
+      break;
   }
- 
- if (collection->params.descending)
- {
-   switch(collection->params.sort)
-   {
-     case DT_COLLECTION_SORT_DATETIME:
-     case DT_COLLECTION_SORT_FILENAME:
-     case DT_COLLECTION_SORT_ID:
-     {
-       sq = dt_util_dstrcat(sq, " %s", "desc");
-     }
-     break;
 
-     /* These two are special as they are descending in the default view */
-     case DT_COLLECTION_SORT_RATING:
-     {
-       g_free(sq);
-       sq = NULL;
-       sq = dt_util_dstrcat(sq, ORDER_BY_QUERY, "flags & 7");
-     }
-     break;
+  if (collection->params.descending)
+  {
+    switch(collection->params.sort)
+    {
+      case DT_COLLECTION_SORT_DATETIME:
+      case DT_COLLECTION_SORT_FILENAME:
+      case DT_COLLECTION_SORT_ID:
+      {
+        sq = dt_util_dstrcat(sq, " %s", "desc");
+      }
+      break;
 
-     case DT_COLLECTION_SORT_COLOR:
-     {
-       g_free(sq);
-       sq = NULL;
-       sq = dt_util_dstrcat(sq, ORDER_BY_QUERY, "color, filename");
-     }
-     break;
-   }
- }
- return sq;
+      /* These two are special as they are descending in the default view */
+      case DT_COLLECTION_SORT_RATING:
+      {
+        g_free(sq);
+        sq = NULL;
+        sq = dt_util_dstrcat(sq, ORDER_BY_QUERY, "flags & 7");
+      }
+      break;
+
+      case DT_COLLECTION_SORT_COLOR:
+      {
+        g_free(sq);
+        sq = NULL;
+        sq = dt_util_dstrcat(sq, ORDER_BY_QUERY, "color, filename");
+      }
+      break;
+    }
+  }
+  return sq;
 }
 
 
@@ -359,13 +359,13 @@ uint32_t dt_collection_get_count(const dt_collection_t *collection)
 
   gchar *fq = g_strstr_len(query, strlen(query), "from");
   if ((collection->params.query_flags&COLLECTION_QUERY_USE_ONLY_WHERE_EXT))
-    count_query = dt_util_dstrcat(NULL, "select count(images.id) from images %s", collection->where_ext); 
+    count_query = dt_util_dstrcat(NULL, "select count(images.id) from images %s", collection->where_ext);
   else
     count_query = dt_util_dstrcat(count_query, "select count(id) %s", fq);
 
   DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), count_query, -1, &stmt, NULL);
-  if ((collection->params.query_flags&COLLECTION_QUERY_USE_LIMIT) && 
-      !(collection->params.query_flags&COLLECTION_QUERY_USE_ONLY_WHERE_EXT)) 
+  if ((collection->params.query_flags&COLLECTION_QUERY_USE_LIMIT) &&
+      !(collection->params.query_flags&COLLECTION_QUERY_USE_ONLY_WHERE_EXT))
   {
     DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, 0);
     DT_DEBUG_SQLITE3_BIND_INT(stmt, 2, -1);
@@ -410,7 +410,7 @@ GList *dt_collection_get_selected (const dt_collection_t *collection)
 
   query = dt_util_dstrcat(query, "where id in (select imgid from selected_images) %s", sq);
 
-    
+
   DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),query, -1, &stmt, NULL);
 
   while (sqlite3_step (stmt) == SQLITE_ROW)
@@ -430,77 +430,149 @@ GList *dt_collection_get_selected (const dt_collection_t *collection)
 }
 
 static void
-get_query_string(const int property, const gchar *escaped_text, char *query)
+get_query_string(const dt_collection_properties_t property, const gchar *escaped_text, char *query)
 {
   switch(property)
   {
-    case 0: // film roll
-      snprintf(query, 1024, "(film_id in (select id from film_rolls where folder like '%s'))", escaped_text);
+    case DT_COLLECTION_PROP_FILMROLL: // film roll
+      if (strlen(escaped_text) == 0)
+        snprintf(query, 1024, "(film_id in (select id from film_rolls where folder like '%s%%'))", escaped_text);
+      else
+        snprintf(query, 1024, "(film_id in (select id from film_rolls where folder like '%s'))", escaped_text);
       break;
 
-    case 5: // colorlabel
+    case DT_COLLECTION_PROP_FOLDERS: // folders
+      snprintf(query, 1024, "(film_id in (select id from film_rolls where folder like '%s%%'))", escaped_text);
+      break;
+
+    case DT_COLLECTION_PROP_COLORLABEL: // colorlabel
     {
       int color = 0;
-      if     (strcmp(escaped_text,_("red")   )==0) color=0;
-      else if(strcmp(escaped_text,_("yellow"))==0) color=1;
-      else if(strcmp(escaped_text,_("green") )==0) color=2;
-      else if(strcmp(escaped_text,_("blue")  )==0) color=3;
-      else if(strcmp(escaped_text,_("purple"))==0) color=4;
-      snprintf(query, 1024, "(id in (select imgid from color_labels where color=%d))", color);
+      if(strcmp(escaped_text, "%")==0) snprintf(query, 1024, "(id in (select imgid from color_labels where color IS NOT NULL))");
+      else
+      {
+        if     (strcmp(escaped_text,_("red")   )==0) color=0;
+        else if(strcmp(escaped_text,_("yellow"))==0) color=1;
+        else if(strcmp(escaped_text,_("green") )==0) color=2;
+        else if(strcmp(escaped_text,_("blue")  )==0) color=3;
+        else if(strcmp(escaped_text,_("purple"))==0) color=4;
+        snprintf(query, 1024, "(id in (select imgid from color_labels where color=%d))", color);
+      }
     }
     break;
 
-    case 4: // history
+    case DT_COLLECTION_PROP_HISTORY: // history
       snprintf(query, 1024, "(id %s in (select imgid from history where imgid=images.id)) ",(strcmp(escaped_text,_("altered"))==0)?"":"not");
       break;
 
-    case 1: // camera
+    case DT_COLLECTION_PROP_CAMERA: // camera
       snprintf(query, 1024, "(maker || ' ' || model like '%%%s%%')", escaped_text);
       break;
-    case 2: // tag
+    case DT_COLLECTION_PROP_TAG: // tag
       snprintf(query, 1024, "(id in (select imgid from tagged_images as a join "
                "tags as b on a.tagid = b.id where name like '%s'))", escaped_text);
       break;
 
       // TODO: How to handle images without metadata? In the moment they are not shown.
       // TODO: Autogenerate this code?
-    case 6: // title
+    case DT_COLLECTION_PROP_TITLE: // title
       snprintf(query, 1024, "(id in (select id from meta_data where key = %d and value like '%%%s%%'))",
                DT_METADATA_XMP_DC_TITLE, escaped_text);
       break;
-    case 7: // description
+    case DT_COLLECTION_PROP_DESCRIPTION: // description
       snprintf(query, 1024, "(id in (select id from meta_data where key = %d and value like '%%%s%%'))",
                DT_METADATA_XMP_DC_DESCRIPTION, escaped_text);
       break;
-    case 8: // creator
+    case DT_COLLECTION_PROP_CREATOR: // creator
       snprintf(query, 1024, "(id in (select id from meta_data where key = %d and value like '%%%s%%'))",
                DT_METADATA_XMP_DC_CREATOR, escaped_text);
       break;
-    case 9: // publisher
+    case DT_COLLECTION_PROP_PUBLISHER: // publisher
       snprintf(query, 1024, "(id in (select id from meta_data where key = %d and value like '%%%s%%'))",
                DT_METADATA_XMP_DC_PUBLISHER, escaped_text);
       break;
-    case 10: // rights
+    case DT_COLLECTION_PROP_RIGHTS: // rights
       snprintf(query, 1024, "(id in (select id from meta_data where key = %d and value like '%%%s%%'))",
                DT_METADATA_XMP_DC_RIGHTS, escaped_text);
       break;
-    case 11: // lens
+    case DT_COLLECTION_PROP_LENS: // lens
       snprintf(query, 1024, "(lens like '%%%s%%')", escaped_text);
       break;
-    case 12: // iso
+    case DT_COLLECTION_PROP_ISO: // iso
       snprintf(query, 1024, "(iso like '%%%s%%')", escaped_text);
       break;
-    case 13: // aperature
+    case DT_COLLECTION_PROP_APERTURE: // aperture
       snprintf(query, 1024, "(aperture like '%%%s%%')", escaped_text);
       break;
-    case 14: // filename
+    case DT_COLLECTION_PROP_FILENAME: // filename
       snprintf(query, 1024, "(filename like '%%%s%%')", escaped_text);
       break;
 
-    default: // case 3: // day
+    default: // day or time
       snprintf(query, 1024, "(datetime_taken like '%%%s%%')", escaped_text);
       break;
   }
+}
+
+int
+dt_collection_serialize(char *buf, int bufsize)
+{
+  char confname[200];
+  int c;
+  const int num_rules = dt_conf_get_int("plugins/lighttable/collect/num_rules");
+  c = snprintf(buf, bufsize, "%d:", num_rules);
+  buf += c;
+  bufsize -= c;
+  for(int k=0; k<num_rules; k++)
+  {
+    snprintf(confname, 200, "plugins/lighttable/collect/mode%1d", k);
+    const int mode = dt_conf_get_int(confname);
+    c = snprintf(buf, bufsize, "%d:", mode);
+    buf += c;
+    bufsize -= c;
+    snprintf(confname, 200, "plugins/lighttable/collect/item%1d", k);
+    const int item = dt_conf_get_int(confname);
+    c = snprintf(buf, bufsize, "%d:", item);
+    buf += c;
+    bufsize -= c;
+    snprintf(confname, 200, "plugins/lighttable/collect/string%1d", k);
+    gchar *str = dt_conf_get_string(confname);
+    if(str && (str[0] != '\0'))
+      c = snprintf(buf, bufsize, "%s$", str);
+    else
+      c = snprintf(buf, bufsize, "%%$");
+    buf += c;
+    bufsize -= c;
+    g_free(str);
+  }
+  return 0;
+}
+
+void
+dt_collection_deserialize(char *buf)
+{
+  int num_rules = 0;
+  char str[400], confname[200];
+  sprintf(str, "%%");
+  int mode = 0, item = 0;
+  sscanf(buf, "%d", &num_rules);
+  if(num_rules == 0) num_rules = 1;
+  dt_conf_set_int("plugins/lighttable/collect/num_rules", num_rules);
+  while(buf[0] != ':') buf++;
+  buf++;
+  for(int k=0; k<num_rules; k++)
+  {
+    sscanf(buf, "%d:%d:%[^$]", &mode, &item, str);
+    snprintf(confname, 200, "plugins/lighttable/collect/mode%1d", k);
+    dt_conf_set_int(confname, mode);
+    snprintf(confname, 200, "plugins/lighttable/collect/item%1d", k);
+    dt_conf_set_int(confname, item);
+    snprintf(confname, 200, "plugins/lighttable/collect/string%1d", k);
+    dt_conf_set_string(confname, str);
+    while(buf[0] != '$' && buf[0] != '\0') buf++;
+    buf++;
+  }
+  dt_collection_update_query(darktable.collection);
 }
 
 void
@@ -509,9 +581,10 @@ dt_collection_update_query(const dt_collection_t *collection)
   char query[1024], confname[200];
   gchar *complete_query = NULL;
 
-  const int num_rules = CLAMP(dt_conf_get_int("plugins/lighttable/collect/num_rules"), 1, 10);
+  const int _n_r = dt_conf_get_int("plugins/lighttable/collect/num_rules");
+  const int num_rules = CLAMP(_n_r, 1, 10);
   char *conj[] = {"and", "or", "and not"};
-  
+
   complete_query = dt_util_dstrcat(complete_query, "(");
 
   for(int i=0; i<num_rules; i++)
@@ -527,9 +600,9 @@ dt_collection_update_query(const dt_collection_t *collection)
 
     get_query_string(property, escaped_text, query);
 
-    if(i > 0) 
+    if(i > 0)
       complete_query = dt_util_dstrcat(complete_query, " %s %s", conj[mode], query);
-    else 
+    else
       complete_query = dt_util_dstrcat(complete_query, "%s", query);
 
     g_free(escaped_text);
@@ -584,8 +657,41 @@ void dt_collection_hint_message(const dt_collection_t *collection)
   int c = dt_collection_get_count(collection);
   int cs = dt_collection_get_selected_count(collection);
   g_snprintf(message, 1024,
-      ngettext("%d image of %d in current collection is selected", "%d images of %d in current collection are selected", cs), cs, c);
+             ngettext("%d image of %d in current collection is selected", "%d images of %d in current collection are selected", cs), cs, c);
   dt_control_hinter_message(darktable.control, message);
+}
+
+int dt_collection_image_offset(int imgid)
+{
+  const gchar *qin = dt_collection_get_query (darktable.collection);
+  int offset = 0;
+  sqlite3_stmt *stmt;
+
+  if(qin)
+  {
+    DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), qin, -1, &stmt, NULL);
+    DT_DEBUG_SQLITE3_BIND_INT(stmt, 1,  0);
+    DT_DEBUG_SQLITE3_BIND_INT(stmt, 2, -1);
+
+    gboolean found = FALSE;
+
+    while (sqlite3_step (stmt) == SQLITE_ROW)
+    {
+      int id = sqlite3_column_int(stmt, 0);
+      if (imgid == id)
+      {
+        found = TRUE;
+        break;
+      }
+      offset++;
+    }
+
+    if (!found)
+      offset = 0;
+
+    sqlite3_finalize(stmt);
+  }
+  return offset;
 }
 
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh

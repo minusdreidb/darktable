@@ -18,6 +18,7 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
+#include "common/debug.h"
 #include "common/darktable.h"
 #include "common/styles.h"
 #include "common/history.h"
@@ -33,48 +34,96 @@ typedef struct dt_gui_styles_dialog_t
 {
   gboolean edit;
   int32_t imgid;
-  GtkWidget *name,*description;
-  GtkWidget *advanced;
-  GtkBox *advanced_box;
+  gchar *nameorig;
+  GtkWidget *name,*description,*duplicate;
   GtkTreeView *items;
+  GtkTreeView *items_new;
 } dt_gui_styles_dialog_t;
 
 
 typedef enum _style_items_columns_t
 {
   DT_STYLE_ITEMS_COL_ENABLED=0,
+  DT_STYLE_ITEMS_COL_UPDATE,
   DT_STYLE_ITEMS_COL_NAME,
   DT_STYLE_ITEMS_COL_NUM,
+  DT_STYLE_ITEMS_COL_UPDATE_NUM,
   DT_STYLE_ITEMS_NUM_COLS
 }
 _styles_columns_t;
 
-static GList *
-_gui_styles_get_active_items (dt_gui_styles_dialog_t *sd)
+static int _single_selected_imgid()
 {
-  GList *result=NULL;
+  int imgid = -1;
+  sqlite3_stmt *stmt;
+  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
+                              "select imgid from selected_images", -1, &stmt, NULL);
+  while(sqlite3_step(stmt) == SQLITE_ROW)
+  {
+    if (imgid == -1)
+      imgid = sqlite3_column_int(stmt, 0);
+    else
+    {
+      imgid = -1;
+      break;
+    }
+  }
+  sqlite3_finalize(stmt);
+  return imgid;
+}
 
+void
+_gui_styles_get_active_items (dt_gui_styles_dialog_t *sd, GList **enabled, GList **update)
+{
   /* run thru all items and add active ones to result */
   GtkTreeIter iter;
   GtkTreeModel *model = gtk_tree_view_get_model (GTK_TREE_VIEW (sd->items));
+  glong num=0, update_num=0;
+  gboolean active, uactive;
+
   if (gtk_tree_model_get_iter_first(model,&iter))
   {
     do
     {
-      gboolean active;
-      guint num=0;
-      gtk_tree_model_get (model, &iter, DT_STYLE_ITEMS_COL_ENABLED, &active, DT_STYLE_ITEMS_COL_NUM, &num, -1);
-      if (active)
-        result = g_list_append (result, (gpointer)(long unsigned int) num);
-
+      gtk_tree_model_get (model, &iter, DT_STYLE_ITEMS_COL_ENABLED, &active, DT_STYLE_ITEMS_COL_UPDATE, &uactive, DT_STYLE_ITEMS_COL_NUM, &num, DT_STYLE_ITEMS_COL_UPDATE_NUM, &update_num, -1);
+      if (active || uactive)
+      {
+        *enabled = g_list_append (*enabled, (gpointer)(glong) num);
+        if (update != NULL)
+        {
+          if (uactive || num==-1)
+            *update = g_list_append (*update, (gpointer)(glong) update_num);
+          else
+            *update = g_list_append (*update, (gpointer)(glong) -1);
+        }
+      }
     }
     while (gtk_tree_model_iter_next (model,&iter));
   }
 
-  //gtk_tree_model_get_iter (model, &iter, path);
-// gtk_tree_model_get (model, &iter, DT_STYLE_ITEMS_COL_ENABLED, &toggle_item, -1);
-
-  return result;
+  /* check for new items to be included */
+  model = gtk_tree_view_get_model (GTK_TREE_VIEW (sd->items_new));
+  if (gtk_tree_model_get_iter_first(model,&iter))
+  {
+    do
+    {
+      gtk_tree_model_get (model, &iter, DT_STYLE_ITEMS_COL_ENABLED, &active, DT_STYLE_ITEMS_COL_NUM, &num, DT_STYLE_ITEMS_COL_UPDATE_NUM, &update_num, -1);
+      if (active)
+      {
+        if (update_num==-1) // item from style
+        {
+          *enabled = g_list_append (*enabled, (gpointer)(glong) num);
+          *update = g_list_append (*update, (gpointer)(glong) -1);
+        }
+        else // item from image
+        {
+          *update = g_list_append (*update, (gpointer)(glong) update_num);
+          *enabled = g_list_append (*enabled, (gpointer)(glong) -1);
+        }
+      }
+    }
+    while (gtk_tree_model_iter_next (model,&iter));
+  }
 }
 
 static void
@@ -83,7 +132,8 @@ _gui_styles_new_style_response(GtkDialog *dialog, gint response_id, dt_gui_style
   if (response_id == GTK_RESPONSE_ACCEPT)
   {
     /* get the filtered list from dialog */
-    GList *result = _gui_styles_get_active_items(g);
+    GList *result = NULL;
+    _gui_styles_get_active_items(g, &result, NULL);
 
     /* create the style from imageid */
     if (gtk_entry_get_text ( GTK_ENTRY (g->name)) && strlen(gtk_entry_get_text ( GTK_ENTRY (g->name)))>0)
@@ -93,6 +143,7 @@ _gui_styles_new_style_response(GtkDialog *dialog, gint response_id, dt_gui_style
         g->imgid,result);
   }
   gtk_widget_destroy(GTK_WIDGET(dialog));
+  g_free(g->nameorig);
   g_free(g);
 }
 
@@ -102,31 +153,32 @@ _gui_styles_edit_style_response(GtkDialog *dialog, gint response_id, dt_gui_styl
   if (response_id == GTK_RESPONSE_ACCEPT)
   {
     /* get the filtered list from dialog */
-    //GList *result = _gui_styles_get_active_items(g);
+    GList *result = NULL, *update = NULL;
 
+    _gui_styles_get_active_items(g, &result, &update);
 
+    if (gtk_entry_get_text ( GTK_ENTRY (g->name)) && strlen(gtk_entry_get_text ( GTK_ENTRY (g->name)))>0)
+    {
+      if (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (g->duplicate)))
+        dt_styles_create_from_style(
+          g->nameorig,
+          gtk_entry_get_text ( GTK_ENTRY (g->name)),
+          gtk_entry_get_text ( GTK_ENTRY (g->description)),
+          result,
+          g->imgid, update);
+      else
+        dt_styles_update(
+          g->nameorig,
+          gtk_entry_get_text ( GTK_ENTRY (g->name)),
+          gtk_entry_get_text ( GTK_ENTRY (g->description)),
+          result,
+          g->imgid, update);
+    }
   }
   gtk_widget_destroy(GTK_WIDGET(dialog));
+  g_free(g->nameorig);
   g_free(g);
 }
-
-static void
-_gui_styles_toggle_advanced(GtkWidget *widget,gpointer user_data)
-{
-  dt_gui_styles_dialog_t *sd = (dt_gui_styles_dialog_t *)user_data;
-
-  if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(sd->advanced)))
-  {
-    gtk_widget_set_visible(GTK_WIDGET(sd->advanced_box), TRUE);
-    gtk_widget_set_no_show_all(GTK_WIDGET(sd->advanced_box), FALSE);
-    gtk_widget_show_all (GTK_WIDGET(sd->advanced_box));
-    gtk_widget_set_no_show_all(GTK_WIDGET(sd->advanced_box), TRUE);
-  }
-  else
-    gtk_widget_hide (GTK_WIDGET (sd->advanced_box));
-
-}
-
 
 static void
 _gui_styles_item_toggled (GtkCellRendererToggle *cell,
@@ -139,6 +191,31 @@ _gui_styles_item_toggled (GtkCellRendererToggle *cell,
   GtkTreePath *path = gtk_tree_path_new_from_string (path_str);
   GtkTreeIter iter;
   gboolean toggle_item;
+  glong num, update_num;
+
+  gtk_tree_model_get_iter (model, &iter, path);
+  gtk_tree_model_get (model, &iter, DT_STYLE_ITEMS_COL_ENABLED, &toggle_item, DT_STYLE_ITEMS_COL_NUM, &num, DT_STYLE_ITEMS_COL_UPDATE_NUM, &update_num, -1);
+
+  toggle_item = (toggle_item==TRUE)?FALSE:TRUE;
+
+  if (update_num != -1 && toggle_item) // include so not updated
+    gtk_list_store_set (GTK_LIST_STORE (model), &iter, DT_STYLE_ITEMS_COL_UPDATE, FALSE, -1);
+
+  gtk_list_store_set (GTK_LIST_STORE (model), &iter, DT_STYLE_ITEMS_COL_ENABLED, toggle_item, -1);
+  gtk_tree_path_free (path);
+}
+
+static void
+_gui_styles_item_new_toggled (GtkCellRendererToggle *cell,
+                              gchar                 *path_str,
+                              gpointer               data)
+{
+  dt_gui_styles_dialog_t *sd = (dt_gui_styles_dialog_t *)data;
+
+  GtkTreeModel *model = gtk_tree_view_get_model (GTK_TREE_VIEW (sd->items_new));
+  GtkTreePath *path = gtk_tree_path_new_from_string (path_str);
+  GtkTreeIter iter;
+  gboolean toggle_item;
 
   gtk_tree_model_get_iter (model, &iter, path);
   gtk_tree_model_get (model, &iter, DT_STYLE_ITEMS_COL_ENABLED, &toggle_item, -1);
@@ -147,7 +224,28 @@ _gui_styles_item_toggled (GtkCellRendererToggle *cell,
 
   gtk_list_store_set (GTK_LIST_STORE (model), &iter, DT_STYLE_ITEMS_COL_ENABLED, toggle_item, -1);
   gtk_tree_path_free (path);
+}
 
+static void
+_gui_styles_update_toggled (GtkCellRendererToggle *cell,
+                            gchar                 *path_str,
+                            gpointer               data)
+{
+  dt_gui_styles_dialog_t *sd = (dt_gui_styles_dialog_t *)data;
+
+  GtkTreeModel *model = gtk_tree_view_get_model (GTK_TREE_VIEW (sd->items));
+  GtkTreePath *path = gtk_tree_path_new_from_string (path_str);
+  GtkTreeIter iter;
+  gboolean toggle_item;
+
+  gtk_tree_model_get_iter (model, &iter, path);
+  gtk_tree_model_get (model, &iter, DT_STYLE_ITEMS_COL_UPDATE, &toggle_item, -1);
+
+  toggle_item = (toggle_item==TRUE)?FALSE:TRUE;
+
+  gtk_list_store_set (GTK_LIST_STORE (model), &iter, DT_STYLE_ITEMS_COL_ENABLED, !toggle_item, -1);
+  gtk_list_store_set (GTK_LIST_STORE (model), &iter, DT_STYLE_ITEMS_COL_UPDATE, toggle_item, -1);
+  gtk_tree_path_free (path);
 }
 
 void
@@ -159,7 +257,7 @@ dt_gui_styles_dialog_new (int imgid)
 void
 dt_gui_styles_dialog_edit (const char *name)
 {
-  _gui_styles_dialog_run (TRUE,name,0);
+  _gui_styles_dialog_run (TRUE,name,_single_selected_imgid());
 }
 
 static gint _g_list_find_module_by_name(gconstpointer a, gconstpointer b)
@@ -178,13 +276,22 @@ _gui_styles_dialog_run (gboolean edit,const char *name,int imgid)
 
   /* initialize the dialog */
   dt_gui_styles_dialog_t *sd=(dt_gui_styles_dialog_t *)g_malloc (sizeof (dt_gui_styles_dialog_t));
+  sd->nameorig = g_strdup(name);
+  sd->imgid = imgid;
 
   if (edit)
+  {
     sprintf (title,_("edit style"));
+    g_strlcat (title, " \"", 512);
+    g_strlcat(title, name, 512);
+    g_strlcat(title, "\"", 512);
+    sd->duplicate = gtk_check_button_new_with_label(_("duplicate style"));
+    g_object_set (sd->duplicate, "tooltip-text", _("creates a duplicate of the style before applying changes"), (char *)NULL);
+  }
   else
   {
-    sd->imgid = imgid;
     sprintf (title,"%s",_("create new style"));
+    sd->duplicate = NULL;
   }
   GtkWidget *window = dt_ui_main_window(darktable.gui->ui);
   GtkDialog *dialog = GTK_DIALOG (gtk_dialog_new_with_buttons (title,
@@ -213,8 +320,7 @@ _gui_styles_dialog_run (gboolean edit,const char *name,int imgid)
   if (edit)
   {
     /* name */
-    gtk_entry_set_text (GTK_ENTRY (sd->name),name);
-    gtk_widget_set_sensitive (sd->name,FALSE);
+    gtk_entry_set_text(GTK_ENTRY(sd->name), name);
     /* description */
     gchar *desc = dt_styles_get_description (name);
     if (desc)
@@ -224,20 +330,15 @@ _gui_styles_dialog_run (gboolean edit,const char *name,int imgid)
     }
   }
 
-  sd->advanced_box = GTK_BOX (gtk_vbox_new(FALSE,0));
-
-  sd->advanced = gtk_check_button_new_with_label(_("advanced edit of style"));
-  g_signal_connect (sd->advanced, "toggled", G_CALLBACK (_gui_styles_toggle_advanced), sd);
-
   gtk_box_pack_start (box,sd->name,FALSE,FALSE,0);
   gtk_box_pack_start (box,sd->description,FALSE,FALSE,0);
-  gtk_box_pack_start (box,sd->advanced,FALSE,FALSE,0);
-  gtk_box_pack_start (box,GTK_WIDGET (sd->advanced_box),TRUE,TRUE,0);
-
 
   /* create the list of items */
   sd->items = GTK_TREE_VIEW (gtk_tree_view_new ());
-  GtkListStore *liststore = gtk_list_store_new (DT_STYLE_ITEMS_NUM_COLS, G_TYPE_BOOLEAN, G_TYPE_STRING, G_TYPE_UINT);
+  GtkListStore *liststore = gtk_list_store_new (DT_STYLE_ITEMS_NUM_COLS, G_TYPE_BOOLEAN, G_TYPE_BOOLEAN, G_TYPE_STRING, G_TYPE_LONG, G_TYPE_LONG);
+
+  sd->items_new = GTK_TREE_VIEW (gtk_tree_view_new ());
+  GtkListStore *liststore_new = gtk_list_store_new (DT_STYLE_ITEMS_NUM_COLS, G_TYPE_BOOLEAN, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_LONG, G_TYPE_LONG);
 
   /* enabled */
   GtkCellRenderer *renderer = gtk_cell_renderer_toggle_new ();
@@ -252,6 +353,37 @@ _gui_styles_dialog_run (gboolean edit,const char *name,int imgid)
       DT_STYLE_ITEMS_COL_ENABLED,
       NULL);
 
+  if (edit)
+  {
+    GtkCellRenderer *renderer = gtk_cell_renderer_toggle_new ();
+    gtk_cell_renderer_toggle_set_activatable (GTK_CELL_RENDERER_TOGGLE (renderer), TRUE);
+    g_object_set_data (G_OBJECT (renderer), "column", (gint *)DT_STYLE_ITEMS_COL_ENABLED);
+    g_signal_connect (renderer, "toggled", G_CALLBACK (_gui_styles_item_new_toggled), sd);
+    gtk_tree_view_insert_column_with_attributes (GTK_TREE_VIEW (sd->items_new),
+                                                 -1, _("include"),
+                                                 renderer,
+                                                 "active",
+                                                 DT_STYLE_ITEMS_COL_ENABLED,
+                                                 NULL);
+  }
+
+  /* update */
+  if (edit && imgid != -1)
+  {
+    renderer = gtk_cell_renderer_toggle_new ();
+    gtk_cell_renderer_toggle_set_activatable (GTK_CELL_RENDERER_TOGGLE (renderer), TRUE);
+    g_object_set_data (G_OBJECT (renderer), "column", (gint *)DT_STYLE_ITEMS_COL_UPDATE);
+    g_signal_connect (renderer, "toggled", G_CALLBACK (_gui_styles_update_toggled), sd);
+
+    gtk_tree_view_insert_column_with_attributes
+      (GTK_TREE_VIEW (sd->items),
+       -1, _("update"),
+       renderer,
+       "active",
+       DT_STYLE_ITEMS_COL_UPDATE,
+       NULL);
+  }
+
   /* name */
   renderer = gtk_cell_renderer_text_new ();
   g_object_set_data (G_OBJECT (renderer), "column", (gint *)DT_STYLE_ITEMS_COL_NAME);
@@ -262,32 +394,57 @@ _gui_styles_dialog_run (gboolean edit,const char *name,int imgid)
       "text",
       DT_STYLE_ITEMS_COL_NAME,
       NULL);
-
+  if (edit)
+    gtk_tree_view_insert_column_with_attributes (GTK_TREE_VIEW (sd->items_new),
+      -1, _("item"),
+      renderer,
+      "text",
+      DT_STYLE_ITEMS_COL_NAME,
+      NULL);
 
   gtk_tree_selection_set_mode (gtk_tree_view_get_selection(GTK_TREE_VIEW(sd->items)), GTK_SELECTION_SINGLE);
   gtk_tree_view_set_model (GTK_TREE_VIEW(sd->items), GTK_TREE_MODEL(liststore));
 
-  gtk_box_pack_start (sd->advanced_box,GTK_WIDGET (sd->items),TRUE,TRUE,0);
+  gtk_tree_selection_set_mode (gtk_tree_view_get_selection(GTK_TREE_VIEW(sd->items_new)), GTK_SELECTION_SINGLE);
+  gtk_tree_view_set_model (GTK_TREE_VIEW(sd->items_new), GTK_TREE_MODEL(liststore_new));
 
+  gboolean has_new_item = FALSE, has_item = FALSE;
 
   /* fill list with history items */
   GtkTreeIter iter;
   if (edit)
   {
     /* get history items for named style and populate the items list */
-    GList *items = dt_styles_get_item_list (name);
+    GList *items = dt_styles_get_item_list (name, FALSE, imgid);
     if (items)
     {
       do
       {
         dt_style_item_t *item=(dt_style_item_t *)items->data;
 
-        gtk_list_store_append (GTK_LIST_STORE(liststore), &iter);
-        gtk_list_store_set (GTK_LIST_STORE(liststore), &iter,
-                            DT_STYLE_ITEMS_COL_ENABLED, TRUE,
-                            DT_STYLE_ITEMS_COL_NAME, item->name,
-                            DT_STYLE_ITEMS_COL_NUM, (guint)item->num,
-                            -1);
+        if (item->num!=-1 && item->selimg_num!=-1) // defined in style and image
+        {
+          gtk_list_store_append (GTK_LIST_STORE(liststore), &iter);
+          gtk_list_store_set (GTK_LIST_STORE(liststore), &iter,
+                              DT_STYLE_ITEMS_COL_ENABLED, TRUE,
+                              DT_STYLE_ITEMS_COL_UPDATE, FALSE,
+                              DT_STYLE_ITEMS_COL_NAME, item->name,
+                              DT_STYLE_ITEMS_COL_NUM, (glong)item->num,
+                              DT_STYLE_ITEMS_COL_UPDATE_NUM, (glong)item->selimg_num,
+                              -1);
+          has_item = TRUE;
+        }
+        else if (item->num!=-1 || item->selimg_num!=-1) // defined in one or the other, let a way to select it or not
+        {
+          gtk_list_store_append (GTK_LIST_STORE(liststore_new), &iter);
+          gtk_list_store_set (GTK_LIST_STORE(liststore_new), &iter,
+                              DT_STYLE_ITEMS_COL_ENABLED, (glong)item->num!=-1?TRUE:FALSE,
+                              DT_STYLE_ITEMS_COL_NAME, item->name,
+                              DT_STYLE_ITEMS_COL_NUM, (glong)item->num,
+                              DT_STYLE_ITEMS_COL_UPDATE_NUM, (glong)item->selimg_num,
+                              -1);
+          has_new_item = TRUE;
+        }
 
         g_free(item->name);
         g_free(item);
@@ -297,7 +454,7 @@ _gui_styles_dialog_run (gboolean edit,const char *name,int imgid)
   }
   else
   {
-    GList *items = dt_history_get_items (imgid);
+    GList *items = dt_history_get_items (imgid,FALSE);
     if (items)
     {
       do
@@ -310,7 +467,7 @@ _gui_styles_dialog_run (gboolean edit,const char *name,int imgid)
         GList *modules = g_list_first(darktable.develop->iop);
         if (modules)
         {
-          GList *result = g_list_find_custom (modules, item->name, _g_list_find_module_by_name); // (dt_iop_module_t *)(modules->data);
+          GList *result = g_list_find_custom (modules, item->op, _g_list_find_module_by_name); // (dt_iop_module_t *)(modules->data);
           if( result )
           {
             module = (dt_iop_module_t *)(result->data);
@@ -325,9 +482,12 @@ _gui_styles_dialog_run (gboolean edit,const char *name,int imgid)
         gtk_list_store_set (GTK_LIST_STORE(liststore), &iter,
                             DT_STYLE_ITEMS_COL_ENABLED, enabled,
                             DT_STYLE_ITEMS_COL_NAME, name,
-                            DT_STYLE_ITEMS_COL_NUM, (guint)item->num,
+                            DT_STYLE_ITEMS_COL_NUM, (glong)item->num,
                             -1);
 
+        has_item = TRUE;
+
+        g_free(item->op);
         g_free(item->name);
         g_free(item);
       }
@@ -340,8 +500,17 @@ _gui_styles_dialog_run (gboolean edit,const char *name,int imgid)
     }
   }
 
-  g_object_unref (liststore);
+  if (has_item)
+    gtk_box_pack_start (box,GTK_WIDGET (sd->items),TRUE,TRUE,0);
 
+  if (has_new_item)
+    gtk_box_pack_start (box,GTK_WIDGET (sd->items_new),TRUE,TRUE,0);
+
+  if (edit)
+    gtk_box_pack_start (box,GTK_WIDGET (sd->duplicate),FALSE,FALSE,0);
+
+  g_object_unref (liststore);
+  g_object_unref (liststore_new);
 
   /* run dialog */
   if (edit)
@@ -349,8 +518,8 @@ _gui_styles_dialog_run (gboolean edit,const char *name,int imgid)
   else
     g_signal_connect (dialog, "response", G_CALLBACK (_gui_styles_new_style_response), sd);
 
-  gtk_widget_set_no_show_all(GTK_WIDGET(sd->advanced_box), TRUE);
   gtk_widget_show_all (GTK_WIDGET (dialog));
+  gtk_dialog_run(GTK_DIALOG(dialog));
 
 }
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh

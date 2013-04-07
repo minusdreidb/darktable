@@ -96,7 +96,7 @@ const char *name()
 
 int flags()
 {
-  return IOP_FLAGS_INCLUDE_IN_STYLES | IOP_FLAGS_ALLOW_TILING;
+  return IOP_FLAGS_SUPPORTS_BLENDING | IOP_FLAGS_INCLUDE_IN_STYLES | IOP_FLAGS_ALLOW_TILING | IOP_FLAGS_PREVIEW_NON_OPENCL;
 }
 
 int
@@ -176,7 +176,8 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
   {
     /* setup gaussian kernel */
     const int radius = 8;
-    const int rad = MIN(radius, ceilf(radius * roi_in->scale / piece->iscale));
+    const float _r = ceilf(radius * roi_in->scale / piece->iscale);
+    const int rad = MIN(radius, _r);
     const int wd = 2*rad+1;
     float mat[wd*wd];
     float *m;
@@ -248,18 +249,18 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
   #pragma omp parallel for default(none) shared(roi_out, in, out, zonemap_scale,zonemap_offset) schedule(static)
 #endif
   for (int j=0; j<roi_out->height; j++)
-  for (int i=0; i<roi_out->width; i++)
-  {
-    /* remap lightness into zonemap and apply lightness */
-    const float *inp = in + ch*(j*roi_out->width+i);
-    float *outp = out + ch*(j*roi_out->width+i);
+    for (int i=0; i<roi_out->width; i++)
+    {
+      /* remap lightness into zonemap and apply lightness */
+      const float *inp = in + ch*(j*roi_out->width+i);
+      float *outp = out + ch*(j*roi_out->width+i);
 
-    const int rz = CLAMPS(inp[0]*rzscale, 0, size-2);  // zone index
+      const int rz = CLAMPS(inp[0]*rzscale, 0, size-2);  // zone index
 
-    const float zs = ((rz > 0) ? (zonemap_offset[rz]/inp[0]) : 0) + zonemap_scale[rz];
+      const float zs = ((rz > 0) ? (zonemap_offset[rz]/inp[0]) : 0) + zonemap_scale[rz];
 
-    _mm_stream_ps(outp,_mm_mul_ps(_mm_load_ps(inp),_mm_set1_ps(zs)));
-  }
+      _mm_stream_ps(outp,_mm_mul_ps(_mm_load_ps(inp),_mm_set1_ps(zs)));
+    }
 
   _mm_sfence();
 
@@ -304,7 +305,7 @@ process_cl (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_mem 
   dt_opencl_set_kernel_arg(devid, gd->kernel_zonesystem, 1, sizeof(cl_mem), (void *)&dev_out);
   dt_opencl_set_kernel_arg(devid, gd->kernel_zonesystem, 2, sizeof(int), (void *)&width);
   dt_opencl_set_kernel_arg(devid, gd->kernel_zonesystem, 3, sizeof(int), (void *)&height);
-  dt_opencl_set_kernel_arg(devid, gd->kernel_zonesystem, 4, sizeof(int), (void *)&size); 
+  dt_opencl_set_kernel_arg(devid, gd->kernel_zonesystem, 4, sizeof(int), (void *)&size);
   dt_opencl_set_kernel_arg(devid, gd->kernel_zonesystem, 5, sizeof(cl_mem), (void *)&dev_zmo);
   dt_opencl_set_kernel_arg(devid, gd->kernel_zonesystem, 6, sizeof(cl_mem), (void *)&dev_zms);
   err = dt_opencl_enqueue_kernel_2d(devid, gd->kernel_zonesystem, sizes);
@@ -391,7 +392,7 @@ void init(dt_iop_module_t *module)
   module->params = malloc(sizeof(dt_iop_zonesystem_params_t));
   module->default_params = malloc(sizeof(dt_iop_zonesystem_params_t));
   module->default_enabled = 0;
-  module->priority = 588; // module order created by iop_dependencies.py, do not edit!
+  module->priority = 600; // module order created by iop_dependencies.py, do not edit!
   module->params_size = sizeof(dt_iop_zonesystem_params_t);
   module->gui_data = NULL;
   dt_iop_zonesystem_params_t tmp = (dt_iop_zonesystem_params_t)
@@ -443,7 +444,8 @@ void gui_init(struct dt_iop_module_t *self)
   self->widget = gtk_vbox_new (FALSE,DT_GUI_IOP_MODULE_CONTROL_SPACING);
 
   /* create the zone preview widget */
-  const int panel_width = MAX(-1, MIN(500, dt_conf_get_int("panel_width")));
+  const int _p_w = dt_conf_get_int("panel_width");
+  const int panel_width = MAX(-1, MIN(500, _p_w));
 
   g->preview = gtk_drawing_area_new();
   g_signal_connect (G_OBJECT (g->preview), "expose-event", G_CALLBACK (dt_iop_zonesystem_preview_expose), self);
@@ -470,18 +472,18 @@ void gui_init(struct dt_iop_module_t *self)
 
   /* add signal handler for preview pipe finish to redraw the preview */
   dt_control_signal_connect(darktable.signals,
-			    DT_SIGNAL_DEVELOP_PREVIEW_PIPE_FINISHED, 
-			    G_CALLBACK(_iop_zonesystem_redraw_preview_callback), 
-			    self);
+                            DT_SIGNAL_DEVELOP_PREVIEW_PIPE_FINISHED,
+                            G_CALLBACK(_iop_zonesystem_redraw_preview_callback),
+                            self);
 
 
 }
 
 void gui_cleanup(struct dt_iop_module_t *self)
 {
-  dt_control_signal_disconnect(darktable.signals, 
-			       G_CALLBACK(_iop_zonesystem_redraw_preview_callback), 
-			       self);
+  dt_control_signal_disconnect(darktable.signals,
+                               G_CALLBACK(_iop_zonesystem_redraw_preview_callback),
+                               self);
 
   dt_iop_zonesystem_gui_data_t *g = (dt_iop_zonesystem_gui_data_t *)self->gui_data;
   dt_pthread_mutex_destroy(&g->lock);
@@ -644,9 +646,9 @@ dt_iop_zonesystem_bar_scrolled (GtkWidget *widget, GdkEventScroll *event, dt_iop
   dt_iop_zonesystem_params_t *p = (dt_iop_zonesystem_params_t *)self->params;
   int cs = p->size;
   if(event->direction == GDK_SCROLL_UP)
-    p->size+=2;
+    p->size+=1;
   else if(event->direction == GDK_SCROLL_DOWN)
-    p->size-=2;
+    p->size-=1;
 
   /* sanity checks */
   p->size = p->size>MAX_ZONE_SYSTEM_SIZE?MAX_ZONE_SYSTEM_SIZE:p->size;
@@ -674,18 +676,16 @@ dt_iop_zonesystem_bar_motion_notify (GtkWidget *widget, GdkEventMotion *event, d
   const int inset = DT_ZONESYSTEM_INSET;
   int width = widget->allocation.width - 2*inset, height = widget->allocation.height - 2*inset;
 
+  /* calculate zonemap */
+  float zonemap[MAX_ZONE_SYSTEM_SIZE]= {-1};
+  _iop_zonesystem_calculate_zonemap (p,zonemap);
+
   /* record mouse position within control */
   g->mouse_x = CLAMP(event->x - inset, 0, width);
   g->mouse_y = CLAMP(height - 1 - event->y + inset, 0, height);
 
-  g->zone_under_mouse = (g->mouse_x/width) / (1.0/(p->size-1));
-
   if (g->is_dragging)
   {
-    /* calculate zonemap */
-    float zonemap[MAX_ZONE_SYSTEM_SIZE]= {-1};
-    _iop_zonesystem_calculate_zonemap (p,zonemap);
-
     if ( (g->mouse_x/width) > zonemap[g->current_zone-1] &&  (g->mouse_x/width) < zonemap[g->current_zone+1] )
     {
       p->zone[g->current_zone] = (g->mouse_x/width);
@@ -693,7 +693,24 @@ dt_iop_zonesystem_bar_motion_notify (GtkWidget *widget, GdkEventMotion *event, d
     }
   }
   else
-    g->hilite_zone = (g->mouse_y<(height/2.0))?TRUE:FALSE;
+  {
+    /* decide which zone the mouse is over */
+    if(g->mouse_y >= height*(1.0-DT_ZONESYSTEM_REFERENCE_SPLIT))
+      g->zone_under_mouse = (g->mouse_x/width) / (1.0/(p->size-1));
+    else
+    {
+      float xpos = g->mouse_x/width;
+      for(int z = 0; z < p->size-1; z++)
+      {
+        if(xpos >= zonemap[z] && xpos < zonemap[z+1])
+        {
+          g->zone_under_mouse = z;
+          break;
+        }
+      }
+    }
+    g->hilite_zone = (g->mouse_y<height)?TRUE:FALSE;
+  }
 
   gtk_widget_queue_draw (self->widget);
   gtk_widget_queue_draw (g->preview);
@@ -777,7 +794,7 @@ dt_iop_zonesystem_preview_expose (GtkWidget *widget, GdkEventExpose *event, dt_i
 void _iop_zonesystem_redraw_preview_callback(gpointer instance, gpointer user_data)
 {
   dt_iop_module_t *self = (dt_iop_module_t *)user_data;
-  dt_iop_zonesystem_gui_data_t *g = (dt_iop_zonesystem_gui_data_t *)self->gui_data;  
+  dt_iop_zonesystem_gui_data_t *g = (dt_iop_zonesystem_gui_data_t *)self->gui_data;
 
   dt_control_queue_redraw_widget(g->preview);
 }

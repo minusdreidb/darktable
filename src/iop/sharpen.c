@@ -31,6 +31,7 @@
 #include "bauhaus/bauhaus.h"
 #include "gui/accelerators.h"
 #include "gui/gtk.h"
+#include "gui/presets.h"
 #include <gtk/gtk.h>
 #include <inttypes.h>
 
@@ -84,6 +85,17 @@ flags ()
   return IOP_FLAGS_SUPPORTS_BLENDING | IOP_FLAGS_ALLOW_TILING;
 }
 
+void init_presets (dt_iop_module_so_t *self)
+{
+  dt_iop_sharpen_params_t tmp = (dt_iop_sharpen_params_t)
+    { 2.0, 0.5, 0.5 };
+  // add the preset.
+  dt_gui_presets_add_generic(_("sharpen"), self->op, self->version(), &tmp, sizeof(dt_iop_sharpen_params_t), 1);
+  // restrict to raw images
+  dt_gui_presets_update_ldr(_("sharpen"), self->op, self->version(), 2);
+  // make it auto-apply for matching images:
+  dt_gui_presets_update_autoapply(_("sharpen"), self->op, self->version(), 1);
+}
 
 void init_key_accels(dt_iop_module_so_t *self)
 {
@@ -140,18 +152,18 @@ process_cl (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_mem 
   size_t workgroupsize = 0;          // the maximum number of items in a work group
   unsigned long localmemsize = 0;    // the maximum amount of local memory we can use
   size_t kernelworkgroupsize = 0;    // the maximum amount of items in work group for this kernel
-  
+
   // make sure blocksize is not too large
   int blocksize = BLOCKSIZE;
   if(dt_opencl_get_work_group_limits(devid, maxsizes, &workgroupsize, &localmemsize) == CL_SUCCESS &&
-     dt_opencl_get_kernel_work_group_size(devid, gd->kernel_sharpen_hblur, &kernelworkgroupsize) == CL_SUCCESS)
+      dt_opencl_get_kernel_work_group_size(devid, gd->kernel_sharpen_hblur, &kernelworkgroupsize) == CL_SUCCESS)
   {
     // reduce blocksize step by step until it fits to limits
     while(blocksize > maxsizes[0] || blocksize > maxsizes[1] || blocksize > kernelworkgroupsize
           || blocksize > workgroupsize || (blocksize+2*rad)*sizeof(float) > localmemsize)
     {
       if(blocksize == 1) break;
-      blocksize >>= 1;    
+      blocksize >>= 1;
     }
   }
   else
@@ -422,7 +434,7 @@ void process (struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void 
   if(piece->pipe->mask_display)
     dt_iop_alpha_copy(ivoid, ovoid, roi_out->width, roi_out->height);
 }
-    
+
 static void
 radius_callback (GtkWidget *slider, gpointer user_data)
 {
@@ -505,8 +517,8 @@ void init(dt_iop_module_t *module)
   // module->data = malloc(sizeof(dt_iop_sharpen_data_t));
   module->params = malloc(sizeof(dt_iop_sharpen_params_t));
   module->default_params = malloc(sizeof(dt_iop_sharpen_params_t));
-  module->default_enabled = 1;
-  module->priority = 686; // module order created by iop_dependencies.py, do not edit!
+  module->default_enabled = 0;
+  module->priority = 690; // module order created by iop_dependencies.py, do not edit!
   module->params_size = sizeof(dt_iop_sharpen_params_t);
   module->gui_data = NULL;
   dt_iop_sharpen_params_t tmp = (dt_iop_sharpen_params_t)

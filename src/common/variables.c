@@ -118,6 +118,7 @@ gboolean _variable_get_value(dt_variables_params_t *params, gchar *variable,gcha
 
   /* image exif time */
   gboolean have_exif_tm = FALSE;
+  int exif_iso = 100;
   struct tm exif_tm= {0};
   if (params->imgid)
   {
@@ -136,6 +137,7 @@ gboolean _variable_get_value(dt_variables_params_t *params, gchar *variable,gcha
       exif_tm.tm_mon--;
       have_exif_tm = TRUE;
     }
+    exif_iso = img->exif_iso;
     dt_image_cache_read_release(darktable.image_cache, img);
   }
 
@@ -152,7 +154,8 @@ gboolean _variable_get_value(dt_variables_params_t *params, gchar *variable,gcha
   else if( g_strcmp0(variable,"$(EXIF_HOUR)") == 0 && (got_value=TRUE) )  			sprintf(value,"%.2d", (have_exif_tm?exif_tm.tm_hour:tim->tm_hour));
   else if( g_strcmp0(variable,"$(EXIF_MINUTE)") == 0 && (got_value=TRUE) )   		sprintf(value,"%.2d", (have_exif_tm?exif_tm.tm_min:tim->tm_min));
   else if( g_strcmp0(variable,"$(EXIF_SECOND)") == 0 && (got_value=TRUE) )   		sprintf(value,"%.2d", (have_exif_tm?exif_tm.tm_sec:tim->tm_sec));
-  else if( g_strcmp0(variable,"$(ID)") == 0 && (got_value=TRUE) ) sprintf(value,"%d", params->imgid); 
+  else if( g_strcmp0(variable,"$(EXIF_ISO)") == 0 && (got_value=TRUE) )   		sprintf(value,"%d", exif_iso);
+  else if( g_strcmp0(variable,"$(ID)") == 0 && (got_value=TRUE) ) sprintf(value,"%d", params->imgid);
   else if( g_strcmp0(variable,"$(JOBCODE)") == 0 && (got_value=TRUE) )   sprintf(value,"%s",params->jobcode);
   else if( g_strcmp0(variable,"$(ROLL_NAME)") == 0 && params->filename && (got_value=TRUE) )   sprintf(value,"%s",g_path_get_basename(g_path_get_dirname(params->filename)));
   else if( g_strcmp0(variable,"$(FILE_DIRECTORY)") == 0 && params->filename && (got_value=TRUE) )   sprintf(value,"%s",g_path_get_dirname(params->filename)); // undocumented : backward compatibility
@@ -218,7 +221,7 @@ gboolean _variable_get_value(dt_variables_params_t *params, gchar *variable,gcha
     }
     g_list_free(res);
   }
-  
+
 
   g_free(pictures_folder);
 
@@ -246,9 +249,9 @@ void dt_variables_set_time(dt_variables_params_t *params, time_t time)
   params->data->time = time;
 }
 
-const gchar *dt_variables_get_result(dt_variables_params_t *params)
+gchar *dt_variables_get_result(dt_variables_params_t *params)
 {
-  return params->data->result;
+  return g_strdup(params->data->result);
 }
 
 gboolean dt_variables_expand(dt_variables_params_t *params, gchar *string, gboolean iterate)

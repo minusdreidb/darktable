@@ -27,7 +27,7 @@ namespace RawSpeed {
 CameraMetaData::CameraMetaData() {
 }
 
-CameraMetaData::CameraMetaData(char *docname) {
+CameraMetaData::CameraMetaData(const char *docname) {
   ctxt = xmlNewParserCtxt();
   if (ctxt == NULL) {
     ThrowCME("CameraMetaData:Could not initialize context.");
@@ -94,6 +94,13 @@ Camera* CameraMetaData::getCamera(string make, string model, string mode) {
   if (cameras.end() == cameras.find(id))
     return NULL;
   return cameras[id];
+}
+
+bool CameraMetaData::hasCamera(string make, string model, string mode) {
+  string id = string(make).append(model).append(mode);
+  if (cameras.end() == cameras.find(id))
+    return FALSE;
+  return TRUE;
 }
 
 void CameraMetaData::addCamera( Camera* cam )
